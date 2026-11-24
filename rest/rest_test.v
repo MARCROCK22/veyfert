@@ -68,7 +68,7 @@ fn test_a_429_waits_and_sends_the_request_again() {
 }
 
 fn test_a_global_429_blocks_other_routes_but_not_interactions() {
-	mut rc, mock := mock_rest([
+	mut rc, mut mock := mock_rest([
 		Scripted{
 			status:  429
 			headers: {
@@ -83,13 +83,27 @@ fn test_a_global_429_blocks_other_routes_but_not_interactions() {
 	spawn fn [mut rc] () {
 		rc.request(.get, '/users/@me') or {}
 	}()
-	time.sleep(50 * time.millisecond) // the 429 is in, the global block is set
+	// Wait for the 429 to set the global block rather than sleeping: -race slows threads down.
+	for {
+		rc.limiter.mu.lock()
+		blocked := rc.limiter.global_until > time.now()
+		rc.limiter.mu.unlock()
+		if blocked {
+			break
+		}
+		time.sleep(5 * time.millisecond)
+	}
 	started := time.now()
 	rc.request(.post, '/interactions/1/token/callback', body: '{}') or { panic(err) }
 	assert time.now() - started < 100 * time.millisecond, 'an interaction waited for the global block'
 	rc.request(.get, '/guilds/5') or { panic(err) }
-	assert time.now() - started >= 100 * time.millisecond, 'another route ignored the global block'
-	assert mock.requests.len >= 3
+	mock.mu.lock()
+	requests, times := mock.requests.clone(), mock.times.clone()
+	mock.mu.unlock()
+	// The block lasts 200 ms from the 429, the first request.
+	guild := requests.map(it.url.ends_with('/guilds/5')).index(true)
+	assert times[guild] - times[0] >= 190 * time.millisecond, 'another route ignored the global block'
+	assert requests.len >= 3
 }
 
 fn test_routes_that_share_a_bucket_wait_for_each_other() {
