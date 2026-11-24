@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      # veyfert is checked out into ./veyfert, so its parent folder goes on the module path.
+      VPATH: "@vlib|@vmodules|${{ github.workspace }}"
+    steps:
+      - uses: vlang/setup-v@v1.4
+        with:
+          check-latest: true
+      - uses: actions/checkout@v4
+        with:
+          path: veyfert
+      - name: Formatting
+        run: v fmt -verify veyfert
+      - name: Tests
+        run: v -path "$VPATH" test veyfert
+      - name: zstd-stream tests
+        run: v -d veyfert_zstd -path "$VPATH" test veyfert/gateway_test.v
+      - name: Compile-fail tests
+        run: v run veyfert/tests/compile_fail.vsh
+      - name: Examples build with warnings as errors
+        run: |
+          v -W -path "$VPATH" -o basic veyfert/examples/basic
+          v -W -path "$VPATH" -o components veyfert/examples/components
+      - name: Race detector
+        if: runner.os != 'Windows' # -race is not available on Windows
+        run: v -race -path "$VPATH" test veyfert

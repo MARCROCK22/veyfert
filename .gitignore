@@ -1,0 +1,6 @@
+.env
+.veyfert/
+*.exe
+*.pdb
+*.ilk
+.session-invariants.md
