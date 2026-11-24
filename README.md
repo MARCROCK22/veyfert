@@ -353,7 +353,7 @@ assert reply.body.contains('pong')
 
 ## Known V issues
 
-veyfert works around these V issues; [docs/PLAN.md](docs/PLAN.md) (risks 12-20) has the
+veyfert works around these V issues; [docs/PLAN.md](docs/PLAN.md) (risks 12-21) has the
 details:
 
 - `v fmt` flattens field attributes that take several arguments
@@ -372,6 +372,11 @@ details:
   `veyfert.server` has its own small HTTP/1.1 server.
 - A flag enum's built-in `zero()` is not found through a module prefix
   ([vlang/v#32882](https://github.com/vlang/v/issues/32882)), so `discord.no_permissions()` exists.
+- `net.websocket` has data races that `-race` reports: it masks frames with V's global `rand`
+  generator, which is not thread safe; `TcpConn.read` copies the connection while another thread
+  writes to it; and `Client.close()` closes the socket while `listen()` reads from it. veyfert does
+  not use the global generator, and `tests/tsan.supp` suppresses only those three, also for your
+  bot's tests: `TSAN_OPTIONS="suppressions=$PWD/tests/tsan.supp" v -race test .`
 - `net.websocket`'s server binds every interface, so `veyfert.testing` has its own on 127.0.0.1.
 
 ## Deprecation policy

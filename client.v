@@ -3,7 +3,7 @@ module veyfert
 import json2
 import log
 import os
-import rand
+import crypto.rand as crand
 import sync
 import time
 import v.vmod
@@ -121,7 +121,7 @@ pub fn new_client(opts ClientOptions) &Client {
 			1
 		}
 		identify_queue:       &IdentifyQueue{}
-		invalid_session_wait: time.Duration(rand.int_in_range(1000, 5000) or { 2500 }) * time.millisecond
+		invalid_session_wait: time.Duration(1000 + (crand.int_u64(4000) or { 1500 })) * time.millisecond
 		jobs:                 chan Job{cap: 1024}
 		interaction_jobs:     chan Job{cap: 256}
 	}

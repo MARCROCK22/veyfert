@@ -589,7 +589,7 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
     compiled. `v doc` generates the reference, and there are the two examples.
   - There are `CHANGELOG.md`, `LICENSE` and CI in `.github/workflows/ci.yml` (Linux, macOS and
     Windows): formatting, tests, zstd, compile-fail and examples with `-W`, plus `-race` on Linux and
-    macOS. The deprecation policy is in the README.
+    macOS (with `tests/tsan.supp`; see risk 21). The deprecation policy is in the README.
   - Optional items done: saving the session when stopping and resuming it on start (`save_sessions`,
     `load_sessions`; the cache starts empty and `BOT_READY` still fires) and `zstd-stream`
     (`zstd: true`, built with `-d veyfert_zstd`, so it costs nothing to bots that do not use it).
@@ -637,6 +637,7 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
 | 18 | `net.websocket`'s server always listens on every interface (`:port`), with no address option. On Windows, each new test executable that opens such a port triggers the firewall prompt, which the user kept seeing | `websocket_server.v`, `listen()` | `veyfert.testing.ws`: a minimal WebSocket server on 127.0.0.1 for the fake gateways, and `veyfert.server` with a `host` option | Accept the address in `new_server` |
 | 19 | `json2` decodes a `@[raw]` field as the JSON text, but writes it back as a quoted string: decoding and encoding again changes the document | A phase 2 probe | `RawJson`, with its own `from_json(Any)` and `to_json()` | [vlang/v#32879](https://github.com/vlang/v/issues/32879) |
 | 20 | The `zero()` that V generates for a `@[flag]` enum is not found through a module prefix: `discord.Permissions.zero()` gives `unknown function: Permissions.zero`. User-defined static methods (`discord.Permissions.parse`) do work | The split by layer (phase 7) | `discord.no_permissions()` | [vlang/v#32882](https://github.com/vlang/v/issues/32882) |
+| 21 | `net.websocket` has data races that `-race` reports: it masks every frame with `rand.bytes()`, the global generator, which `rand`'s README says is not thread safe; `net.TcpConn.read` and `read_ptr` take the connection by value, so each read copies the struct while a write on another thread updates it; and `Client.close()` closes the socket while `listen()` may be in `recv()` on it | The first `-race` run in CI (phase 7) | veyfert uses `crypto.rand`, never the global generator. Its test WebSocket server reads through its own copy of the connection and shuts the socket down instead of closing it from another thread. CI suppresses only those three races inside `net.websocket` (`tests/tsan.supp`) | To report |
 
 ## 8. Decisions taken by default
 

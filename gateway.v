@@ -5,7 +5,7 @@ import json2
 import log
 import net.websocket
 import os
-import rand
+import crypto.rand as crand
 import sync
 import time
 import veyfert.discord
@@ -416,7 +416,7 @@ fn (mut s Shard) beat(generation int) ! {
 // heartbeat_loop beats every `interval_ms` and drops a connection whose last beat was not
 // acknowledged. It exits when its connection is replaced.
 fn (mut s Shard) heartbeat_loop(generation int, interval_ms int) {
-	time.sleep(time.Duration(i64(f64(interval_ms) * rand.f64() * f64(time.millisecond))))
+	time.sleep(time.Duration(crand.int_u64(u64(interval_ms)) or { 0 }) * time.millisecond)
 	for {
 		s.mu.lock()
 		current := s.generation == generation

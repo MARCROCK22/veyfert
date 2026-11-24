@@ -2,7 +2,7 @@ module veyfert
 
 import json2
 import os
-import rand
+import crypto.rand as crand
 import sync
 import time
 import veyfert.discord
@@ -263,7 +263,7 @@ struct MemberBatch {
 // Asking for every member, or by query, needs the privileged GUILD_MEMBERS intent.
 pub fn (mut c Client) request_members(opts RequestMembers) ![]discord.Member {
 	mut s := c.shard_for(opts.guild_id)!
-	nonce := rand.u64().str()
+	nonce := crand.bytes(8)!.hex()
 	payload := json2.encode(Payload[RequestMembersData]{
 		op: 8
 		d:  RequestMembersData{

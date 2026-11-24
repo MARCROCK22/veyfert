@@ -7,6 +7,7 @@ import crypto.sha1
 import encoding.base64
 import net
 import sync
+import sync.stdatomic
 
 // Conn is the server side of one connection.
 @[heap]
@@ -14,8 +15,9 @@ pub struct Conn {
 pub mut:
 	path string // what the client asked for, such as /?v=10&encoding=json
 mut:
-	tcp &net.TcpConn = unsafe { nil }
-	mu  &sync.Mutex  = sync.new_mutex()
+	tcp    &net.TcpConn = unsafe { nil }
+	mu     &sync.Mutex  = sync.new_mutex()
+	closed bool // set under mu by the reading thread once it has closed the socket
 }
 
 pub fn (mut c Conn) write_string(text string) ! {
@@ -36,7 +38,15 @@ pub fn (mut c Conn) close(code int, reason string) ! {
 
 // drop ends the TCP connection without a close frame, as a network failure does.
 pub fn (mut c Conn) drop() {
-	c.tcp.close() or {}
+	c.mu.lock()
+	defer {
+		c.mu.unlock()
+	}
+	// Only shut the socket down: closing it here would race with the reading thread's recv,
+	// and on Linux would not wake it. That thread closes the socket once its read fails.
+	if !c.closed {
+		net.shutdown(c.tcp.sock.handle)
+	}
 }
 
 fn (mut c Conn) frame(opcode u8, payload []u8) ! {
@@ -57,6 +67,9 @@ fn (mut c Conn) frame(opcode u8, payload []u8) ! {
 	defer {
 		c.mu.unlock()
 	}
+	if c.closed {
+		return error('connection closed')
+	}
 	c.tcp.write(out)!
 }
 
@@ -67,7 +80,7 @@ mut:
 	listener   &net.TcpListener = unsafe { nil }
 	on_connect fn (mut c Conn) !              @[required]
 	on_message fn (mut c Conn, text string) ! @[required]
-	closed     bool
+	closed     &stdatomic.AtomicVal[bool] = stdatomic.new_atomic(false)
 }
 
 // listen starts a server: `on_connect` runs after each handshake and `on_message` for each text
@@ -83,12 +96,12 @@ pub fn listen(port int, on_connect fn (mut c Conn) !, on_message fn (mut c Conn,
 }
 
 pub fn (mut s Server) close() {
-	s.closed = true
+	s.closed.store(true)
 	s.listener.close() or {}
 }
 
 fn (mut s Server) accept() {
-	for !s.closed {
+	for !s.closed.load() {
 		mut tcp := s.listener.accept() or { continue }
 		spawn s.serve(mut tcp)
 	}
@@ -99,28 +112,34 @@ fn (mut s Server) serve(mut tcp net.TcpConn) {
 		tcp: tcp
 	}
 	defer {
-		c.drop()
+		c.mu.lock()
+		c.closed = true
+		tcp.close() or {}
+		c.mu.unlock()
 	}
 	c.path = handshake(mut tcp) or { return }
+	// net.TcpConn.read takes the connection by value, so every read copies the struct; reading
+	// through this copy keeps those copies away from the writes that other threads make via `c`.
+	mut reader := *tcp
 	s.on_connect(mut c) or { return }
 	mut message := []u8{}
 	for {
-		b := read_exact(mut tcp, 2) or { return }
+		b := read_exact(mut reader, 2) or { return }
 		opcode := b[0] & 0x0f
 		masked := b[1] & 0x80 != 0
 		mut n := u64(b[1] & 0x7f)
 		if n == 126 {
-			ext := read_exact(mut tcp, 2) or { return }
+			ext := read_exact(mut reader, 2) or { return }
 			n = u64(ext[0]) << 8 | u64(ext[1])
 		} else if n == 127 {
-			ext := read_exact(mut tcp, 8) or { return }
+			ext := read_exact(mut reader, 8) or { return }
 			n = 0
 			for x in ext {
 				n = n << 8 | u64(x)
 			}
 		}
-		mask := if masked { read_exact(mut tcp, 4) or { return } } else { []u8{} }
-		mut payload := read_exact(mut tcp, int(n)) or { return }
+		mask := if masked { read_exact(mut reader, 4) or { return } } else { []u8{} }
+		mut payload := read_exact(mut reader, int(n)) or { return }
 		if masked {
 			for i in 0 .. payload.len {
 				payload[i] ^= mask[i % 4]

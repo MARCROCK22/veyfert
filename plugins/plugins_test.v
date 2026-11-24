@@ -33,11 +33,16 @@ fn test_the_scheduler_repeats_until_teardown() ! {
 		ticks.add()
 	})
 	c.install(mut jobs)!
-	time.sleep(200 * time.millisecond)
+	// Wait for two runs rather than a fixed time: -race slows every thread down.
+	deadline := time.now().add(5 * time.second)
+	for ticks.count() < 2 && time.now() < deadline {
+		time.sleep(10 * time.millisecond)
+	}
+	assert ticks.count() >= 2
 	jobs.teardown(mut c)!
-	time.sleep(100 * time.millisecond)
+	// A run that had already started may still finish; none may start after it.
+	time.sleep(300 * time.millisecond)
 	seen := ticks.count()
-	assert seen >= 2
-	time.sleep(150 * time.millisecond)
+	time.sleep(300 * time.millisecond)
 	assert ticks.count() == seen
 }

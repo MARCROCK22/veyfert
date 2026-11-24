@@ -38,4 +38,7 @@ jobs:
           v -W -path "$VPATH" -o components veyfert/examples/components
       - name: Race detector
         if: runner.os != 'Windows' # -race is not available on Windows
+        env:
+          # Known races inside net.websocket; the file says which.
+          TSAN_OPTIONS: suppressions=${{ github.workspace }}/veyfert/tests/tsan.supp
         run: v -race -path "$VPATH" test veyfert

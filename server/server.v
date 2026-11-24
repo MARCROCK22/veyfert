@@ -6,6 +6,7 @@ module server
 import crypto.ed25519
 import encoding.hex
 import net
+import sync.stdatomic
 import time
 import veyfert
 
@@ -30,9 +31,9 @@ pub struct Server {
 	host       string
 	port       int
 mut:
-	client   &veyfert.Client  = unsafe { nil }
-	listener &net.TcpListener = unsafe { nil }
-	stopped  bool
+	client   &veyfert.Client            = unsafe { nil }
+	listener &net.TcpListener           = unsafe { nil }
+	stopped  &stdatomic.AtomicVal[bool] = stdatomic.new_atomic(false)
 }
 
 pub fn new_server(mut bot veyfert.Client, opts Options) !&Server {
@@ -57,14 +58,14 @@ pub fn (mut s Server) listen() ! {
 
 // serve answers requests until `close`.
 pub fn (mut s Server) serve() {
-	for !s.stopped {
+	for !s.stopped.load() {
 		mut conn := s.listener.accept() or { continue }
 		spawn s.answer(mut conn)
 	}
 }
 
 pub fn (mut s Server) close() {
-	s.stopped = true
+	s.stopped.store(true)
 	s.listener.close() or {}
 }
 

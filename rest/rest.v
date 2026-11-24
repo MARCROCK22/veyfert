@@ -3,7 +3,7 @@ module rest
 import json2
 import net.http
 import net.urllib
-import rand
+import crypto.rand as crand
 import ratelimit
 import strings
 import sync
@@ -406,7 +406,7 @@ fn redact(path string) string {
 
 // multipart encodes `payload_json` and the files; Discord references them as `files[n]`.
 pub fn multipart(payload_json string, files []discord.File) (string, string) {
-	boundary := 'veyfert${rand.u64()}'
+	boundary := 'veyfert${crand.int_u64(max_u64) or { 0 }}'
 	mut sb := strings.new_builder(1024)
 	if payload_json != '' {
 		sb.write_string('--${boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\nContent-Type: application/json\r\n\r\n${payload_json}\r\n')

@@ -5,21 +5,7 @@ import encoding.hex
 import net.http
 import time
 import veyfert
-import veyfert.rest
-
-@[heap]
-struct Recorder {
-mut:
-	requests []rest.HttpRequest
-}
-
-fn (mut r Recorder) send(req rest.HttpRequest) !rest.HttpResponse {
-	r.requests << req
-	return rest.HttpResponse{
-		status: 200
-		body:   '{"id":"1","channel_id":"2","author":{"id":"3","username":"x"},"content":"","timestamp":""}'
-	}
-}
+import veyfert.testing
 
 @[veyfert.Declare(name: 'fast', description: 'Answers at once')]
 struct Fast {}
@@ -59,8 +45,11 @@ fn test_the_server_checks_signatures_and_answers_inline() ! {
 	public, private := ed25519.generate_key()!
 	_, stranger := ed25519.generate_key()!
 	mut bot := veyfert.new_client(token: 'test')
-	rec := &Recorder{}
-	bot.rest.transport = rec
+	// The late answer is sent from another thread; testing.Transport locks what it records.
+	mut api := testing.new_transport(testing.Response{
+		body: '{"id":"1","channel_id":"2","author":{"id":"3","username":"x"},"content":"","timestamp":""}'
+	})
+	bot.rest.transport = api
 	bot.commands.add(Fast{})
 	bot.commands.add(Slow{})
 	mut s := new_server(mut bot,
@@ -83,15 +72,18 @@ fn test_the_server_checks_signatures_and_answers_inline() ! {
 	fast := post(url, command('fast'), private)!
 	assert fast.body == '{"type":4,"data":{"content":"fast"}}'
 	assert (fast.header.get(.content_type) or { '' }) == 'application/json'
-	assert rec.requests.len == 0
+	assert api.requests().len == 0
 	// No answer within `wait`: the response defers, and the late answer edits it.
 	slow := post(url, command('slow'), private)!
 	assert slow.body == '{"type":5}'
-	time.sleep(600 * time.millisecond)
-	assert rec.requests.len == 1
-	assert rec.requests[0].method == .patch
-	assert rec.requests[0].url.ends_with('/webhooks/2/tok/messages/@original')
-	assert rec.requests[0].body == '{"content":"slow"}'
+	late := api.wait(1, 5 * time.second) or {
+		assert false, 'the late answer never arrived'
+		return
+	}
+	assert late.method == .patch
+	assert late.url.ends_with('/webhooks/2/tok/messages/@original')
+	assert late.body == '{"content":"slow"}'
+	assert api.requests().len == 1
 }
 
 fn test_verify_rejects_tampering() ! {
