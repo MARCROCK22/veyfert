@@ -75,7 +75,7 @@ veyfert needs V 0.5 (master) with `json2`. Until it is on VPM, clone it into a f
 `veyfert` and add its parent folder to V's module path:
 
 ```sh
-git clone https://github.com/<owner>/veyfert ~/vlibs/veyfert
+git clone https://github.com/MARCROCK22/veyfert ~/vlibs/veyfert
 v -path "@vlib|@vmodules|$HOME/vlibs" run bot.v
 ```
 
