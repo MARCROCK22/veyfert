@@ -371,7 +371,7 @@ details:
   program does not show it, so it is not reported yet. veyfert avoids both:
   `veyfert.server` has its own small HTTP/1.1 server.
 - A flag enum's built-in `zero()` is not found through a module prefix
-  (`discord.Permissions.zero()`), so `discord.no_permissions()` exists.
+  ([vlang/v#32882](https://github.com/vlang/v/issues/32882)), so `discord.no_permissions()` exists.
 - `net.websocket`'s server binds every interface, so `veyfert.testing` has its own on 127.0.0.1.
 
 ## Deprecation policy

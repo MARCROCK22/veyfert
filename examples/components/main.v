@@ -9,131 +9,130 @@ import veyfert.discord
 //   v -path "@vlib|@vmodules|<parent of veyfert>" run examples/components
 // Uploading to GUILD_ID replaces the commands of the other example in that server.
 
-@[veyfert.Declare(name: 'botones', description: 'Botones y un menú de selección')]
-struct Botones {}
+@[veyfert.Declare(name: 'buttons', description: 'Buttons and a select menu')]
+struct Buttons {}
 
-fn (c Botones) run(mut ctx veyfert.CommandContext) ! {
+fn (c Buttons) run(mut ctx veyfert.CommandContext) ! {
 	ctx.write(
-		content:    '¿Qué eliges?'
+		content:    'What do you pick?'
 		components: [
-			discord.action_row(discord.button(style: .success, label: 'Uno', custom_id: 'voto:uno'),
-				discord.button(style: .primary, label: 'Dos', custom_id: 'voto:dos')),
+			discord.action_row(discord.button(style: .success, label: 'One', custom_id: 'vote:one'),
+				discord.button(style: .primary, label: 'Two', custom_id: 'vote:two')),
 			discord.action_row(discord.string_select(
-				custom_id:   'voto:menu'
-				placeholder: 'O elige aquí'
+				custom_id:   'vote:menu'
+				placeholder: 'Or pick here'
 				options:     [discord.SelectOption{
-					label: 'Tres'
-					value: 'tres'
+					label: 'Three'
+					value: 'three'
 				}, discord.SelectOption{
-					label: 'Cuatro'
-					value: 'cuatro'
+					label: 'Four'
+					value: 'four'
 				}]
 			)),
 		]
 	)!
 }
 
-// Voto atiende todos los custom_id que empiezan por 'voto:'.
-@[veyfert.CustomIdPrefix('voto:')]
-struct Voto {}
+// Vote handles every custom_id that starts with 'vote:'.
+@[veyfert.CustomIdPrefix('vote:')]
+struct Vote {}
 
-fn (h Voto) run(mut ctx veyfert.ComponentContext) ! {
+fn (h Vote) run(mut ctx veyfert.ComponentContext) ! {
 	choice := if ctx.values.len > 0 { ctx.values[0] } else { ctx.custom_id.all_after(':') }
-	ctx.update(content: '${ctx.author().username} eligió ${choice}', components: [])!
+	ctx.update(content: '${ctx.author().username} picked ${choice}', components: [])!
 }
 
-@[veyfert.Declare(name: 'confirmar', description: 'Espera tu clic dentro del propio comando')]
-struct Confirmar {}
+@[veyfert.Declare(name: 'confirm', description: 'Waits for your click inside the command')]
+struct Confirm {}
 
-fn (c Confirmar) run(mut ctx veyfert.CommandContext) ! {
+fn (c Confirm) run(mut ctx veyfert.CommandContext) ! {
 	ctx.write(
-		content:    '¿Seguro?'
+		content:    'Are you sure?'
 		components: [
 			discord.action_row(discord.button(
 				style:     .danger
-				label:     'Sí'
-				custom_id: 'confirmar:si'
+				label:     'Yes'
+				custom_id: 'confirm:yes'
 			),
-				discord.button(label: 'No', custom_id: 'confirmar:no')),
+				discord.button(label: 'No', custom_id: 'confirm:no')),
 		]
 	)!
 	mut click := ctx.wait_for_component(timeout: 30 * time.second) or {
-		ctx.edit_response(content: 'Se acabó el tiempo.', components: [])!
+		ctx.edit_response(content: 'Time is up.', components: [])!
 		return
 	}
 	click.update(
-		content:    if click.custom_id == 'confirmar:si' { 'Hecho.' } else { 'Cancelado.' }
+		content:    if click.custom_id == 'confirm:yes' { 'Done.' } else { 'Cancelled.' }
 		components: []
 	)!
 }
 
-@[veyfert.Declare(name: 'tarjeta', description: 'Un mensaje con components v2')]
-struct Tarjeta {}
+@[veyfert.Declare(name: 'card', description: 'A message made of components v2')]
+struct Card {}
 
-fn (c Tarjeta) run(mut ctx veyfert.CommandContext) ! {
+fn (c Card) run(mut ctx veyfert.CommandContext) ! {
 	ctx.write(
 		components: [
 			discord.container([
-				discord.section(['## veyfert', 'Components v2 desde structs de V'], discord.thumbnail('https://vlang.io/img/v-logo.png')),
+				discord.section(['## veyfert', 'Components v2 from V structs'], discord.thumbnail('https://vlang.io/img/v-logo.png')),
 				discord.separator(),
-				discord.text_display('El flag IS_COMPONENTS_V2 se pone solo.'),
+				discord.text_display('The IS_COMPONENTS_V2 flag is set for you.'),
 				discord.action_row(discord.button(label: 'V', url: 'https://vlang.io')),
 			], accent_color: 0x5865F2),
 		]
 	)!
 }
 
-enum Animo {
-	contento  @[veyfert.Label: 'Contento']
-	cansado   @[veyfert.Label: 'Cansado']
+enum Mood {
+	happy  @[veyfert.Label: 'Happy']
+	tired  @[veyfert.Label: 'Tired']
 }
 
-// Opinion es un modal: los campos con Label son sus entradas, y llegan rellenos a `submit`.
-@[veyfert.Modal(custom_id: 'opinion', title: 'Tu opinión')]
-struct Opinion {
+// Feedback is a modal: its fields with a Label are its inputs, and they arrive filled in `submit`.
+@[veyfert.Modal(custom_id: 'feedback', title: 'Your feedback')]
+struct Feedback {
 mut:
-	texto string  @[veyfert.Label: 'Cuéntanos'; veyfert.MaxLength: 500; veyfert.Paragraph]
-	email ?string @[veyfert.Desc: 'Por si quieres respuesta'; veyfert.Label: 'Email']
-	animo ?Animo  @[veyfert.Label: '¿Cómo estás?']
+	text  string  @[veyfert.Label: 'Tell us'; veyfert.MaxLength: 500; veyfert.Paragraph]
+	email ?string @[veyfert.Desc: 'In case you want an answer'; veyfert.Label: 'Email']
+	mood  ?Mood   @[veyfert.Label: 'How are you?']
 }
 
-fn (f Opinion) submit(mut ctx veyfert.ModalContext) ! {
+fn (f Feedback) submit(mut ctx veyfert.ModalContext) ! {
 	ctx.write(
-		content:   'Gracias: «${f.texto}» (${f.animo or { Animo.contento }}, ${f.email or { 'sin email' }})'
+		content:   'Thanks: "${f.text}" (${f.mood or { Mood.happy }}, ${f.email or { 'no email' }})'
 		ephemeral: true
 	)!
 }
 
-@[veyfert.Declare(name: 'opinar', description: 'Abre un modal')]
-struct Opinar {}
+@[veyfert.Declare(name: 'feedback', description: 'Opens a modal')]
+struct AskFeedback {}
 
-fn (c Opinar) run(mut ctx veyfert.CommandContext) ! {
-	ctx.modal(Opinion{})!
+fn (c AskFeedback) run(mut ctx veyfert.CommandContext) ! {
+	ctx.modal(Feedback{})!
 }
 
-@[veyfert.Declare(name: 'encuesta', description: 'Crea una encuesta de una hora')]
-struct Encuesta {
+@[veyfert.Declare(name: 'poll', description: 'Creates a one-hour poll')]
+struct CreatePoll {
 mut:
-	pregunta string @[veyfert.Desc: 'La pregunta'; veyfert.MaxLength: 300]
-	opciones string @[veyfert.Desc: 'Respuestas separadas por comas']
+	question string @[veyfert.Desc: 'The question'; veyfert.MaxLength: 300]
+	answers  string @[veyfert.Desc: 'The answers, separated by commas']
 }
 
-fn (c Encuesta) run(mut ctx veyfert.CommandContext) ! {
+fn (c CreatePoll) run(mut ctx veyfert.CommandContext) ! {
 	ctx.write(
-		poll: discord.poll(c.pregunta, c.opciones.split(',').map(it.trim_space()), 1,
-			false)
+		poll: discord.poll(c.question, c.answers.split(',').map(it.trim_space()), 1, false)
 	)!
 }
 
 fn main() {
 	mut bot := veyfert.new_client(token: os.getenv('DISCORD_TOKEN'))
-	bot.commands.add(Botones{})
-	bot.commands.add(Confirmar{})
-	bot.commands.add(Tarjeta{})
-	bot.commands.add(Opinar{})
-	bot.commands.add(Encuesta{})
-	bot.components.add(Voto{})
-	bot.modals.add(Opinion{})
+	bot.commands.add(Buttons{})
+	bot.commands.add(Confirm{})
+	bot.commands.add(Card{})
+	bot.commands.add(AskFeedback{})
+	bot.commands.add(CreatePoll{})
+	bot.components.add(Vote{})
+	bot.modals.add(Feedback{})
 	guild_id := os.getenv('GUILD_ID')
 	bot.upload_commands(
 		guild_id:   if guild_id != '' { discord.Snowflake.parse(guild_id)! } else { none }

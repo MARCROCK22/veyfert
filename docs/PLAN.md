@@ -1,167 +1,168 @@
-# Plan: veyfert, un framework de bots de Discord en V al estilo de Seyfert
+# Plan: veyfert, a Seyfert-style Discord bot framework for V
 
-> Base del análisis: **Seyfert 6.0.0** (commit `ac6e8e9`, 23-11-2026, código fuente completo), **V 0.5.2**
-> (`0a43261`, el master instalado en `C:\v`) y la **API v10 de Discord**.
+> What the analysis is based on: **Seyfert 6.0.0** (commit `ac6e8e9`, 2026-11-23, full source code),
+> **V 0.5.2** (`0a43261`, master) and **Discord API v10**.
 >
-> Leyenda: ✅ verificado con una sonda compilada y ejecutada · 📖 leído en la documentación o el código
-> de V · 🧪 pendiente de comprobar con un spike.
+> Legend: ✅ verified with a probe that was compiled and run · 📖 read in V's documentation or code ·
+> 🧪 still to be checked with a spike.
 
-## 0. Resumen
+## 0. Summary
 
-- **Enfoque "comptime-first".** Comandos, opciones, guards, componentes, modales y eventos son *structs*
-  de V con atributos tipados (`@[attribute]`). La reflexión en compilación genera el JSON que pide Discord
-  y vuelca cada payload en campos tipados. Así se sustituyen los decoradores, la inferencia de tipos de TS
-  y los `Proxy` de JS, y los errores de definición aparecen al compilar.
-- **Módulos por capa** (decidido el 24-11-2026; antes era un solo módulo). En V cada carpeta es un
-  módulo, no hay re-exports y los imports no pueden formar ciclos. Las capas que no dependen del
-  cliente van en submódulos que el núcleo importa:
-  - `veyfert.discord`: tipos, eventos y componentes;
-  - `veyfert.rest`: HTTP y rate limits, con `veyfert.rest.api` (el REST generado);
+- **A comptime-first approach.** Commands, options, guards, components, modals and events are V
+  *structs* with typed attributes (`@[attribute]`). Compile-time reflection generates the JSON Discord
+  asks for and copies each payload into typed fields. That replaces decorators, TypeScript's type
+  inference and JavaScript's `Proxy`, and definition errors show up at compile time.
+- **Modules by layer** (decided on 2026-11-24; it used to be a single module). In V each folder is a
+  module, there are no re-exports, and imports cannot form cycles. The layers that do not depend on
+  the client are submodules that the core imports:
+  - `veyfert.discord`: types, events and components;
+  - `veyfert.rest`: HTTP and rate limits, with `veyfert.rest.api` (the generated REST);
   - `veyfert.cache`.
 
-  Lo opcional (`server`, `testing`, `plugins`) importa `veyfert` en un solo sentido. Un bot escribe
-  `import veyfert` y `import veyfert.discord`. Una fachada con alias de tipo no sirve: el alias pierde
-  los atributos `@[Event]`, y `$if field.typ is Alias` no coincide.
-- **Hilos en vez de async/await.** Cada shard tiene un hilo lector, y como una guild siempre cae en el
-  mismo shard, el orden por guild sale gratis. El código del usuario corre en un pool acotado. Bloquear
-  está permitido, así que `wait_for` sustituye a los colectores con callbacks. Con esto desaparece la
-  razón de ser de `WorkerManager`.
-- **Discord y V hablan snake_case.** V prohíbe mayúsculas en los nombres de campo (✅), así que los modelos
-  reflejan el JSON de Discord tal cual. La capa camelCase y los `Transformers` de Seyfert no hacen falta.
-- **Modelos REST generados** desde la spec OpenAPI oficial de Discord. Los payloads del gateway se
-  escriben a mano.
-- **Ocho fases**, cada una con un criterio de salida comprobable. La fase 0 es un spike vertical que
-  valida todo esto con un bot real.
+  Optional parts (`server`, `testing`, `plugins`) import `veyfert` in one direction only. A bot writes
+  `import veyfert` and `import veyfert.discord`. A facade built from type aliases does not work: an
+  alias loses the `@[Event]` attributes, and `$if field.typ is Alias` does not match.
+- **Threads instead of async/await.** Each shard has a reader thread, and since a guild always lands
+  on the same shard, per-guild ordering comes for free. User code runs on a bounded pool. Blocking is
+  allowed, so `wait_for` replaces callback-based collectors. That removes the reason `WorkerManager`
+  exists.
+- **Discord and V both speak snake_case.** V forbids uppercase letters in field names (✅), so the
+  models mirror Discord's JSON as it is. Seyfert's camelCase layer and its `Transformers` are not
+  needed.
+- **REST models generated** from Discord's official OpenAPI spec. Gateway payloads are written by
+  hand.
+- **Eight phases**, each with an exit criterion that can be checked. Phase 0 is a vertical spike
+  that validates all of this with a real bot.
 
-## 1. Análisis de Seyfert
+## 1. Analysis of Seyfert
 
-### 1.1 Tamaño
+### 1.1 Size
 
-Tiene 315 archivos TypeScript y 51 280 líneas, de las que 15 819 son tipos de la API de Discord.
-Exporta 541 símbolos de runtime (213 clases, 208 funciones, 110 constantes y 10 enums). Los tests ocupan
-unos 80 archivos: Vitest más contratos de tipos compilados con `tsc`.
+It has 315 TypeScript files and 51,280 lines, 15,819 of them Discord API types. It exports 541 runtime
+symbols (213 classes, 208 functions, 110 constants and 10 enums). The tests take about 80 files:
+Vitest plus type contracts compiled with `tsc`.
 
-### 1.2 Inventario por subsistema
+### 1.2 Inventory by subsystem
 
-| Subsistema | Qué ofrece | Líneas |
+| Subsystem | What it offers | Lines |
 |---|---|---|
-| `client/` | `BaseClient`, `Client` (gateway), `HttpClient`, `WorkerClient`; `start()`, `uploadCommands()` y `close()`; `setServices` (rest, cache, langs, middlewares, handleCommand); defaults de comandos, componentes y modales; `allowedMentions`; presence por shard; rango de shards; colectores de eventos (filter, idle, timeout); `Transformers` para estructuras propias | ~3 200 |
-| Plugins | `createPlugin`/`definePlugins` con ciclo `register → setup → teardown` (este último en orden inverso), `imports`, `requires` (semver) y extensiones de cliente y de contexto. Pueden aportar comandos, componentes, modales, eventos, middlewares y wrappers de middleware y de autocomplete. También observadores de comandos y de REST, interceptores de dispatch y de envío al gateway, hooks (`commands:beforeLoad`, `plugins:ready`, `client:close`…), recursos de caché, langs y un registro `shared` tipado. Los plugins tienen orden y diagnósticos | ~3 900 |
-| `commands/` | `Command`, `SubCommand`, `ContextMenuCommand` y `EntryPointCommand`. Decoradores `@Declare` (name, description, botPermissions, defaultMemberPermissions, guildId, nsfw, integrationTypes, contexts, ignore, aliases, props), `@Options`, `@Group(s)`, `@AutoLoad`, `@Middlewares` y `@Locales(T)`. Nueve tipos de opción con required, choices, min/max, channel_types, autocomplete y transformadores `value(ok, fail)`. Nueve hooks por comando además de `run`. Comandos por prefijo con parser de argumentos y alias. Contextos: `write`, `deferReply`, `editResponse`, `deleteResponse`, `editOrReply`, `followup`, `fetchResponse`, `modal`, `author`, `member`, `guild()`, `channel()`, `me()`, `t` y `metadata` | 3 650 |
-| `components/` | Componentes recibidos (incluidos los v2), `ComponentCommand` (customId como string o RegExp, filter), `ModalCommand`, `ModalContext` (inputs, canales, roles, usuarios, radio, checkbox, archivos) y colectores de componentes con idle y timeout | 1 760 |
-| `builders/` | Embed, botones, action rows, cinco select menus, Modal/TextInput, Poll y adjuntos (URL, ruta, buffer o base64). Components v2: Container, Section, TextDisplay, MediaGallery, File, Separator, Thumbnail y Label. Además FileUpload, Checkbox(Group) y RadioGroup, con validación y errores tipados | 2 270 |
-| `api/` | REST sobre `fetch` con buckets aprendidos (`x-ratelimit-bucket` + parámetro mayor), 429 global por token, exención de `/interactions`, tres reintentos ante 502/503, multipart, `X-Audit-Log-Reason` y observadores. Router tipado vía `Proxy` (`client.proxy.channels(id).messages.post()`) y router de CDN | 2 290 |
-| Shorters | 19 clases y ~160 métodos (`client.messages.write`, `client.members.ban`…) que siguen el camino REST → caché → estructura | 2 910 |
-| `cache/` | 13 recursos: users, guilds, members, voiceStates, presences, bans, roles, overwrites, channels, emojis, stickers, stageInstances y messages. Sensible a intents, desactivable por recurso, con paginación y búsqueda desde caché y conteo de miembros con cola ordenada por guild. Adaptadores Memory, LimitedMemory (límite y expiración por recurso) y Worker, con suite de conformidad | 3 060 |
-| `structures/` | ~30 estructuras con métodos: Guild, Member, User, Message, 20 clases de canal (con mixins), 17 de interacción, etc. Incluye BitField y PermissionsBitField | 4 190 |
-| `events/` | Carga desde carpeta, ~80 eventos del gateway y 8 propios (BOT_READY, GUILDS_READY, SHARD_DISCONNECT/RECONNECT, WORKER_*…). La caché se muta antes que los listeners. Soporta `once` y recarga | 1 200 |
-| `websocket/` | `Shard`: heartbeat con detección de zombi, resume o identify, política por close code, cola de envío offline, límite de 120 envíos por 60 s y `requestGuildMembers` por nonce con reintento ante RATE_LIMITED. `ShardManager`: cola de identify por `max_concurrency`, resharding, presence y voz. También un socket propio para Node y `WorkerManager` (threads, clusters o custom, proxy de REST y hot reload por generaciones con traspaso de sesión) | 4 040 |
-| `langs/` | Carga por carpeta, alias de locale, `preferGuildLocale` y acceso tipado `ctx.t.ruta.clave(args).get()` vía `Proxy` | 210 |
-| Utilidades | `Logger`, `Formatter` (markdown, menciones, timestamps, URL OAuth2), `SeyfertError` (~80 códigos estables con metadata y `cause`), `Collection`/`LimitedCollection` y un watcher de desarrollo | ~2 600 |
+| `client/` | `BaseClient`, `Client` (gateway), `HttpClient`, `WorkerClient`; `start()`, `uploadCommands()` and `close()`; `setServices` (rest, cache, langs, middlewares, handleCommand); defaults for commands, components and modals; `allowedMentions`; presence per shard; shard ranges; event collectors (filter, idle, timeout); `Transformers` for custom structures | ~3,200 |
+| Plugins | `createPlugin`/`definePlugins` with a `register → setup → teardown` lifecycle (teardown in reverse order), `imports`, `requires` (semver) and client and context extensions. They can contribute commands, components, modals, events, middlewares, and middleware and autocomplete wrappers. Also command and REST observers, interceptors for dispatches and for gateway sends, hooks (`commands:beforeLoad`, `plugins:ready`, `client:close`…), cache resources, langs and a typed `shared` registry. Plugins have an order and diagnostics | ~3,900 |
+| `commands/` | `Command`, `SubCommand`, `ContextMenuCommand` and `EntryPointCommand`. Decorators `@Declare` (name, description, botPermissions, defaultMemberPermissions, guildId, nsfw, integrationTypes, contexts, ignore, aliases, props), `@Options`, `@Group(s)`, `@AutoLoad`, `@Middlewares` and `@Locales(T)`. Nine option types with required, choices, min/max, channel_types, autocomplete and `value(ok, fail)` transformers. Nine hooks per command besides `run`. Prefix commands with an argument parser and aliases. Contexts: `write`, `deferReply`, `editResponse`, `deleteResponse`, `editOrReply`, `followup`, `fetchResponse`, `modal`, `author`, `member`, `guild()`, `channel()`, `me()`, `t` and `metadata` | 3,650 |
+| `components/` | Received components (v2 included), `ComponentCommand` (customId as a string or a RegExp, filter), `ModalCommand`, `ModalContext` (inputs, channels, roles, users, radio, checkbox, files) and component collectors with idle and timeout | 1,760 |
+| `builders/` | Embed, buttons, action rows, five select menus, Modal/TextInput, Poll and attachments (URL, path, buffer or base64). Components v2: Container, Section, TextDisplay, MediaGallery, File, Separator, Thumbnail and Label. Also FileUpload, Checkbox(Group) and RadioGroup, with validation and typed errors | 2,270 |
+| `api/` | REST over `fetch` with learned buckets (`x-ratelimit-bucket` + major parameter), a global 429 per token, `/interactions` exempt, three retries on 502/503, multipart, `X-Audit-Log-Reason` and observers. A typed router through `Proxy` (`client.proxy.channels(id).messages.post()`) and a CDN router | 2,290 |
+| Shorters | 19 classes and ~160 methods (`client.messages.write`, `client.members.ban`…) that follow the path REST → cache → structure | 2,910 |
+| `cache/` | 13 resources: users, guilds, members, voiceStates, presences, bans, roles, overwrites, channels, emojis, stickers, stageInstances and messages. Intent-aware, each resource can be turned off, with pagination and search from the cache and member counting with a queue ordered per guild. Memory, LimitedMemory (limit and expiry per resource) and Worker adapters, with a conformance suite | 3,060 |
+| `structures/` | ~30 structures with methods: Guild, Member, User, Message, 20 channel classes (with mixins), 17 interaction classes, etc. Includes BitField and PermissionsBitField | 4,190 |
+| `events/` | Loading from a folder, ~80 gateway events and 8 of its own (BOT_READY, GUILDS_READY, SHARD_DISCONNECT/RECONNECT, WORKER_*…). The cache is updated before listeners run. Supports `once` and reloading | 1,200 |
+| `websocket/` | `Shard`: heartbeat with zombie detection, resume or identify, a policy per close code, an offline send queue, a limit of 120 sends per 60 s and `requestGuildMembers` by nonce with a retry on RATE_LIMITED. `ShardManager`: identify queue by `max_concurrency`, resharding, presence and voice. Also its own socket for Node and `WorkerManager` (threads, clusters or custom, a REST proxy and hot reload by generations with session handover) | 4,040 |
+| `langs/` | Loading from a folder, locale aliases, `preferGuildLocale` and typed access `ctx.t.path.key(args).get()` through `Proxy` | 210 |
+| Utilities | `Logger`, `Formatter` (markdown, mentions, timestamps, OAuth2 URLs), `SeyfertError` (~80 stable codes with metadata and `cause`), `Collection`/`LimitedCollection` and a development watcher | ~2,600 |
 
-### 1.3 Contratos de comportamiento que hay que conservar
+### 1.3 Behavioral contracts to keep
 
-1. `start()` conecta pero **no sube comandos**. `uploadCommands` es explícito y compara con una caché
-   para no subir de más.
-2. Cada paquete sigue este orden: interceptores de plugins, `RAW` sin esperar, filtros de duplicados de
-   member y presence, **mutación de caché**, listeners, y después comandos, componentes o modales. Al
-   final se actualiza el estado de ready: `BOT_READY` se emite cuando todos los shards están listos.
-3. Middlewares: `next()` sigue, `stop()` sale en silencio, `stop(motivo)` deniega
-   (`onMiddlewaresError`) y una excepción va a la ruta de error interno. Los globales corren antes que
-   los del comando y los subcomandos heredan los del padre.
-4. Una opción requerida siempre trae valor y una opcional puede faltar. Los errores de opciones se
-   agregan por opción.
-5. La caché respeta los intents y los recursos desactivados.
-6. Los shorters hacen REST, luego caché y luego devuelven la estructura.
-7. Los plugins se montan en orden y se desmontan en orden inverso, con los fallos envueltos con el
-   nombre del plugin.
-8. El envío al gateway pasa por wrappers que pueden reemplazar o vetar el payload.
+1. `start()` connects but **does not upload commands**. `uploadCommands` is explicit and compares
+   against a cache so it does not upload more than needed.
+2. Each packet goes in this order: plugin interceptors, `RAW` without waiting, the member and presence
+   duplicate filters, the **cache update**, listeners, and then commands, components or modals. Last,
+   the ready state is updated: `BOT_READY` fires when every shard is ready.
+3. Middlewares: `next()` goes on, `stop()` ends silently, `stop(reason)` denies
+   (`onMiddlewaresError`), and an exception goes to the internal error path. Global middlewares run
+   before the command's own, and subcommands inherit their parent's.
+4. A required option always has a value and an optional one may be missing. Option errors are
+   collected per option.
+5. The cache respects intents and disabled resources.
+6. Shorters do REST, then cache, then return the structure.
+7. Plugins are set up in order and torn down in reverse order, with failures wrapped with the
+   plugin's name.
+8. Gateway sends go through wrappers that can replace or veto the payload.
 
-### 1.4 Lo que existe por ser JS/TS y no se porta tal cual
+### 1.4 What exists because of JS/TS and is not ported as is
 
-| En Seyfert | Por qué existe | En veyfert |
+| In Seyfert | Why it exists | In veyfert |
 |---|---|---|
-| Workers, `WorkerManager`, proxy de REST entre workers, hot reload por generaciones | JS tiene un solo hilo | Hilos dentro de un proceso; varios procesos solo mediante rangos de shards |
-| `locations`, `@AutoLoad`, `reload()`, watcher, `seyfert.config.*` | Carga de código en runtime | Registro explícito, resuelto al compilar; `v watch` en desarrollo |
-| `SeyfertRegistry`, `ParseClient`, `declare module` | El tipado solo existe a nivel de tipos | Tipos concretos y genéricos; las dependencias van en campos del comando |
-| `Proxy` (router REST, `LangRouter`) | Metaprogramación en runtime | Funciones generadas y structs de idioma |
-| Builders con setters encadenados | Ergonomía de JS | Literales de struct con `@[params]` |
-| Estructuras camelCase + `Transformers` | Discord usa snake_case y JS usa camelCase | Un solo modelo snake_case |
+| Workers, `WorkerManager`, a REST proxy between workers, hot reload by generations | JS has a single thread | Threads inside one process; several processes only through shard ranges |
+| `locations`, `@AutoLoad`, `reload()`, watcher, `seyfert.config.*` | Loading code at runtime | Explicit registration, resolved at compile time; `v watch` while developing |
+| `SeyfertRegistry`, `ParseClient`, `declare module` | Typing only exists at the type level | Concrete and generic types; dependencies go in the command's fields |
+| `Proxy` (REST router, `LangRouter`) | Runtime metaprogramming | Generated functions and language structs |
+| Builders with chained setters | JS ergonomics | Struct literals with `@[params]` |
+| camelCase structures + `Transformers` | Discord uses snake_case and JS uses camelCase | A single snake_case model |
 
-## 2. Features de V que usa veyfert
+## 2. V features veyfert uses
 
-| Feature de V | Uso en veyfert | Estado |
+| V feature | Use in veyfert | Status |
 |---|---|---|
-| Atributos tipados (`@[attribute] struct Declare {...}`) en structs, campos, métodos y funciones, también desde otro módulo (`@[veyfert.Declare(...)]`) | Sustituyen a todos los decoradores | ✅ |
-| Reflexión: `$for f in T.fields`, `f.attributes`, `$if a is Schema`, lectura y escritura de `val.$(f.name)`, `$if f.typ is ?int`, `$for v in E.values`, `$for m in T.methods` y `obj.$method()` | Generar el JSON de comandos y modales, volcar las opciones en campos y descubrir hooks opcionales | ✅ |
-| Recursión por tipos de campo con genéricos | El árbol comando → grupo → subcomando se declara como tipos | ✅ |
-| `$compile_error` dentro de una rama comptime | Una definición inválida da un error de compilación con mensaje propio | ✅ |
-| Genéricos con restricciones (`add[T Command]`) | Registros tipados; V obliga a propagar la restricción | ✅ |
-| Struct genérico que implementa una interfaz no genérica (`Bound[T]` → `Invoker`) | Borrado de tipos en los registros | ✅ |
-| `?T`, `!T`, `or {}` y errores propios con `err is T` | Campos opcionales de Discord, opciones opcionales que hay que manejar, `VeyfertError`/`DiscordError` y el control de flujo de los guards | ✅ `?T` · 📖 errores |
-| Enums `@[flag]` con posición de bit y `as u64`, `.has()` y `Enum.from('nombre')` | Intents, permisos (pasan del bit 32) y flags de mensaje | ✅ |
-| `json2`: `@[json: 'type']`, `@[raw]`, `decode_standard`, `decode_reuse` + `DecodeBuffer`, `@[json_as_number]`, `@[omitempty]` y hooks `to_json`/`from_json_*` | Decodificación del gateway en dos fases (sobre y `d` crudo), Snowflake como string y `Nullable[T]` para PATCH | ✅ |
-| Nombres de campo snake_case obligatorios | Modelos 1:1 con Discord y nombres de opción en minúsculas por construcción | ✅ |
-| `net.websocket` (wss, callbacks `!`, escrituras serializadas por conexión, `Server`) | Shards, y un gateway falso para los tests | ✅ cliente · 📖 server |
-| `net.http` (`fetch`, cabeceras, reutilización de conexiones, timeouts) | Transporte REST | ✅ |
-| `crypto.ed25519` | Verificar firmas de interacciones por HTTP | 📖 |
-| `compress.zlib` y `compress.zstd` (contexto de streaming, incluido en `thirdparty`) | Compresión de payload; más adelante `zstd-stream` | 📖 |
-| `spawn`, canales, `select` con timeout, `shared`/`lock` y `sync` (RwMutex, WaitGroup, OnceLock) | Shards, pool, `wait_for` y caché compartida | 📖 |
-| `ratelimit.TokenBucket`, `log`, `term`, `time`, `semver`, `config.load[T]` | Límite global de REST y cooldowns, logs, colores, requisitos de plugins y configuración desde env, CLI o TOML | 📖 |
-| Funciones condicionales `@[if veyfert_trace ?]` | Trazas que desaparecen del binario si no se compila con `-d veyfert_trace` | 📖 |
-| `@[params]`, `@[required]`, `@[heap]`, `@[noinit]`, structs embebidos, closures con captura explícita, sobrecarga de operadores | Opciones con nombre, idiomas completos al compilar, cliente compartido entre hilos, constructor obligatorio, campos comunes, handlers y orden de Snowflakes | 📖 |
-| `@VMOD_FILE` / `@VMODHASH` | Versión y commit en el `User-Agent` | 📖 |
-| `$embed_file`, scripts `.vsh`, `v test` / `-coverage` / `-race`, `v fmt` / `vet` / `doc`, VPM, compilación cruzada (`-os linux`) y `-prod` | Assets dentro del binario, el generador de código, calidad y publicación. Para desplegar en Linux desde Windows hacen falta Clang, LLD y el sysroot que indica V; si no, se compila en CI | 📖 |
+| Typed attributes (`@[attribute] struct Declare {...}`) on structs, fields, methods and functions, from another module too (`@[veyfert.Declare(...)]`) | They replace every decorator | ✅ |
+| Reflection: `$for f in T.fields`, `f.attributes`, `$if a is Schema`, reading and writing `val.$(f.name)`, `$if f.typ is ?int`, `$for v in E.values`, `$for m in T.methods` and `obj.$method()` | Generating the JSON of commands and modals, copying options into fields and finding optional hooks | ✅ |
+| Recursion over field types with generics | The tree command → group → subcommand is declared as types | ✅ |
+| `$compile_error` inside a comptime branch | An invalid definition gives a compile error with its own message | ✅ |
+| Constrained generics (`add[T Command]`) | Typed registries; V requires the constraint to propagate | ✅ |
+| A generic struct that implements a non-generic interface (`Bound[T]` → `Invoker`) | Type erasure in the registries | ✅ |
+| `?T`, `!T`, `or {}` and custom errors with `err is T` | Optional Discord fields, optional options that must be handled, `DiscordError` and guard control flow | ✅ |
+| `@[flag]` enums with a bit position and `as u64`, `.has()` and `Enum.from('name')` | Intents, permissions (past bit 32) and message flags | ✅ |
+| `json2`: `@[json: 'type']`, `@[raw]`, `decode_standard`, `decode_reuse` + `DecodeBuffer`, `@[json_as_number]`, `@[omitempty]` and the `to_json`/`from_json_*` hooks | Two-step gateway decoding (envelope and raw `d`), Snowflake as a string and `Nullable[T]` for PATCH | ✅ |
+| Mandatory snake_case field names | Models 1:1 with Discord, and lowercase option names by construction | ✅ |
+| `net.websocket` (wss, `!` callbacks, writes serialized per connection, `Server`) | Shards | ✅ client |
+| `net.http` (`fetch`, headers, connection reuse, timeouts) | The REST transport | ✅ |
+| `crypto.ed25519` | Checking the signatures of interactions received over HTTP | ✅ |
+| `compress.zlib` and `compress.zstd` (streaming context, bundled in `thirdparty`) | Payload compression and `zstd-stream` | ✅ |
+| `spawn`, channels, `select` with a timeout, `shared`/`lock` and `sync` (RwMutex, WaitGroup, OnceLock) | Shards, the pool, `wait_for` and the shared cache | ✅ |
+| `ratelimit.TokenBucket`, `log`, `term`, `time`, `semver`, `config.load[T]` | The global REST limit and cooldowns, logs, colors, plugin requirements and configuration from env, CLI or TOML | 📖 |
+| Conditional functions `@[if veyfert_trace ?]` | Traces that disappear from the binary unless built with `-d veyfert_trace` | 📖 |
+| `@[params]`, `@[required]`, `@[heap]`, `@[noinit]`, embedded structs, closures with explicit captures, operator overloading | Named options, complete languages at compile time, a client shared between threads, a mandatory constructor, common fields, handlers and Snowflake ordering | 📖 |
+| `@VMOD_FILE` / `@VMODHASH` | The version and commit in the `User-Agent` | ✅ version |
+| `$embed_file`, `.vsh` scripts, `v test` / `-coverage` / `-race`, `v fmt` / `vet` / `doc`, VPM, cross-compilation (`-os linux`) and `-prod` | Assets inside the binary, the code generator, quality and publishing. Deploying to Linux from Windows needs Clang, LLD and the sysroot V names; otherwise, build in CI | 📖 |
 
-**Descartadas, con su motivo:**
+**Rejected, with the reason:**
 
-| Feature | Motivo |
+| Feature | Reason |
 |---|---|
-| `go` (goroutines) | Su README la marca como experimental. `spawn` basta: pocos hilos de larga vida más un pool |
-| `@[live]` | La doc dice que no tiene efecto con el compilador por defecto; recomienda `v watch` |
-| `x.async`, `x.scheduler`, `x.executor` como base | Los módulos `x.` son experimentales; si se usan, detrás de una API interna pequeña |
-| `cache.Lru` | Su README dice que mantener la recencia es lineal y que no es thread-safe |
-| `eventbus` | Basado en `voidptr`, sin tipos |
-| `i18n` como sistema por defecto | Claves de texto sin comprobar y sin interpolación documentada. Los structs de idioma tipados son más fieles a `ctx.t` |
-| ORM/`db`, backends JS y WASM, `-autofree`, `-gc none` | Fuera del alcance, o riesgo sin beneficio |
+| `go` (goroutines) | Its README marks it as experimental. `spawn` is enough: a few long-lived threads plus a pool |
+| `@[live]` | The docs say it has no effect with the default compiler, and recommend `v watch` |
+| `x.async`, `x.scheduler`, `x.executor` as a foundation | `x.` modules are experimental; if used, behind a small internal API |
+| `cache.Lru` | Its README says keeping recency is linear and it is not thread-safe |
+| `eventbus` | Based on `voidptr`, untyped |
+| `i18n` as the default system | Unchecked text keys and no documented interpolation. Typed language structs are closer to `ctx.t` |
+| ORM/`db`, the JS and WASM backends, `-autofree`, `-gc none` | Out of scope, or a risk with no benefit |
 
-## 3. Enfoques considerados
+## 3. Approaches considered
 
-| Enfoque | Cómo | A favor | En contra |
+| Approach | How | For | Against |
 |---|---|---|---|
-| A. Port literal | Clases → structs, decoradores → atributos de texto, `json2.Any`, mapas en runtime | Se mapea directo desde Seyfert | Desaprovecha los tipos de V; más lento; los errores salen en runtime |
-| **B. Comptime-first** (recomendado) | Structs con atributos tipados + reflexión; hilos; un módulo | Errores al compilar, payloads tipados sin `Any`, menos código | Depende de la reflexión de V, que las sondas ya validaron |
-| C. Todo generado | Un DSL o una spec → un `.vsh` que genera comandos y modelos | Cobertura mecánica | Mala experiencia para quien escribe el bot. Solo compensa para los modelos REST, y B ya los genera |
+| A. Literal port | Classes → structs, decorators → text attributes, `json2.Any`, runtime maps | Maps directly from Seyfert | Wastes V's types; slower; errors show up at runtime |
+| **B. Comptime-first** (recommended) | Structs with typed attributes + reflection; threads; a single module (later split by layer, see §0) | Compile-time errors, typed payloads without `Any`, less code | Depends on V's reflection, which the probes already validated |
+| C. Everything generated | A DSL or a spec → a `.vsh` that generates commands and models | Mechanical coverage | A poor experience for whoever writes the bot. Only worth it for the REST models, and B generates those already |
 
-**Recomendación: B**, con generación de código solo para los modelos y endpoints REST.
+**Recommendation: B**, with code generation only for the REST models and endpoints.
 
-## 4. Diseño
+## 4. Design
 
-### 4.1 Equivalencias Seyfert → veyfert
+### 4.1 Seyfert → veyfert equivalences
 
 | Seyfert | veyfert |
 |---|---|
-| `@Declare({...})` | `@[veyfert.Declare(name: 'x', description: 'y')]`, más atributos pequeños (`Nsfw`, `Perms`, `Guilds`…), porque un esquema exige todos sus campos |
-| `@Options({ q: createStringOption(...) })` | Campos del struct. El tipo del campo decide el tipo de opción, `?T` la vuelve opcional, y `@[Desc]`, `@[Min]`/`@[Max]`, `@[MinLength]`/`@[MaxLength]` y `@[ChannelTypes]` añaden el resto, siempre con un solo valor por atributo (ver riesgo 12). Un campo enum genera las `choices` |
-| `ctx.options.q` tipado por inferencia | `c.q`, un campo normal de tipo `string` o `?string` |
-| `@Options([SubA, SubB])`, `@Group`, `@Groups` | Campos marcados con `@[Sub]` cuyo tipo es otro comando. Un nivel intermedio se convierte en grupo |
-| `createMiddleware` + `@Middlewares(['a'])` + `ctx.metadata.a` | Guards: campos cuyo tipo implementa `Guard` (`check(mut ctx) !`), sin atributo (riesgo 15). El estado que deja el guard es el metadato tipado |
-| `stop()` / `stop('motivo')` / excepción | `return veyfert.stop()` / `return veyfert.deny('motivo')` / cualquier otro error |
-| Hooks `onRunError`, `onOptionsError`… | Métodos opcionales del struct, descubiertos con `$for m in T.methods`, más defaults en el cliente |
-| `createEvent({ data: { name }, run })` | `bot.on[veyfert.MessageCreate](fn (e, mut c) ! {...})`. El nombre del evento sale de `@[Event('MESSAGE_CREATE')]` en el tipo del payload |
-| `client.collectors.create(...)` | `c.wait_for[T](filter:, timeout:)`, que bloquea esperando en un canal con `select` |
-| `ComponentCommand` / `ModalCommand` | `@[CustomId('x')]` o `@[CustomIdPrefix('x:')]` + `run`. Un modal es un struct cuyos campos son los inputs: la misma reflexión lo genera y lo parsea |
-| Builders | Structs planos que reflejan el wire de Discord, más constructores con `@[params]` |
-| `client.proxy...` | Una función generada por endpoint, y `rest.request[T](...)` como vía cruda |
+| `@Declare({...})` | `@[veyfert.Declare(name: 'x', description: 'y')]`, plus small attributes (`Nsfw`, `Perms`, `Guilds`…), because a schema requires all its fields |
+| `@Options({ q: createStringOption(...) })` | Struct fields. The field's type sets the option type, `?T` makes it optional, and `@[Desc]`, `@[Min]`/`@[Max]`, `@[MinLength]`/`@[MaxLength]` and `@[Channels]` add the rest, always with a single value per attribute (see risk 12). An enum field generates the `choices` |
+| `ctx.options.q` typed by inference | `c.q`, a plain field of type `string` or `?string` |
+| `@Options([SubA, SubB])`, `@Group`, `@Groups` | Fields marked `@[Sub]` whose type is another command. A middle level becomes a group |
+| `createMiddleware` + `@Middlewares(['a'])` + `ctx.metadata.a` | Guards: fields whose type implements `Guard` (`check(mut ctx) !`), with no attribute (risk 15). The state the guard leaves is the typed metadata |
+| `stop()` / `stop('reason')` / an exception | `return veyfert.stop()` / `return veyfert.deny('reason')` / any other error |
+| Hooks `onRunError`, `onOptionsError`… | Optional methods of the struct, found with `$for m in T.methods`, plus defaults on the client |
+| `createEvent({ data: { name }, run })` | `bot.on[discord.MessageCreate](fn (e, mut c) ! {...})`. The event name comes from `@[discord.Event('MESSAGE_CREATE')]` on the payload type |
+| `client.collectors.create(...)` | `c.wait_for[T](filter, timeout)`, which blocks until a matching event arrives |
+| `ComponentCommand` / `ModalCommand` | `@[CustomId('x')]` or `@[CustomIdPrefix('x:')]` + `run`. A modal is a struct whose fields are the inputs: the same reflection builds and parses it |
+| Builders | Flat structs that mirror Discord's wire format, plus constructors with `@[params]` |
+| `client.proxy...` | One generated function per endpoint in `veyfert.rest.api`, and `rest.request(...)` as the raw path |
 | Shorters | `c.messages.write(id, content: '...')!` |
-| `SeyfertError` | `VeyfertError{ code, metadata, cause }` y `DiscordError{ status, code, message }` |
-| `ctx.t.clave.get()` | `langs.of(ctx).clave`, con `Langs[T]` sobre un struct de idioma cuyos campos son `@[required]` |
+| `SeyfertError` | `rest.DiscordError{ status, code, message }`, `veyfert.GuardStop` and plain V errors |
+| `ctx.t.key.get()` | `langs.of(ctx.interaction).key`, with `Langs[T]` over a language struct whose fields are `@[required]` |
 | `Logger` | `log.ThreadSafeLog` + `@[if veyfert_trace ?]` |
-| `HttpClient` | `veyfert.server.serve(mut bot, port:, public_key:)` |
+| `HttpClient` | `server.serve(mut bot, port:, public_key:)` from `veyfert.server` |
 
-### 4.2 Lo que escribe el autor de un bot (boceto)
+### 4.2 What a bot author writes (sketch)
 
-Las piezas están verificadas por las sondas; la API exacta todavía no.
+The pieces are verified by probes and tests; this sketch follows the current API.
 
 ```v
 module main
@@ -169,34 +170,35 @@ module main
 import os
 import time
 import veyfert
+import veyfert.discord
 
-@[veyfert.Declare(name: 'ping', description: 'Responde con la latencia')]
+@[veyfert.Declare(name: 'ping', description: 'Replies with the latency')]
 struct Ping {}
 
 fn (c Ping) run(mut ctx veyfert.CommandContext) ! {
 	ctx.write(content: 'Pong! ${ctx.client.latency()}')!
 }
 
-enum Orden {
-	relevancia
-	fecha
+enum Order {
+	relevance
+	newest
 }
 
-@[veyfert.Declare(name: 'buscar', description: 'Busca en la base de datos')]
-struct Buscar {
-	db &Db // sin atributo: es una dependencia y viaja con el prototipo
+@[veyfert.Declare(name: 'search', description: 'Searches the database')]
+struct Search {
+	db &Db // no attribute: a dependency, which travels with the prototype
 mut:
-	cd     veyfert.Cooldown = veyfert.cooldown(3, 10 * time.second) // un guard: corre antes de `run`
-	texto  string @[veyfert.Desc: 'Qué buscar']                                          // requerida
-	limite ?int   @[veyfert.Desc: 'Máximo de resultados'; veyfert.Min: 1; veyfert.Max: 25] // opcional
-	orden  ?Orden @[veyfert.Desc: 'Cómo ordenar']                                      // choices del enum
+	cd    veyfert.Cooldown = veyfert.cooldown(3, 10 * time.second) // a guard: it runs before `run`
+	text  string @[veyfert.Desc: 'What to look for']                                    // required
+	limit ?int   @[veyfert.Desc: 'How many results at most'; veyfert.Max: 25; veyfert.Min: 1] // optional
+	order ?Order @[veyfert.Desc: 'How to sort']                                        // enum choices
 }
 
-fn (c Buscar) run(mut ctx veyfert.CommandContext) ! {
-	hits := c.db.search(c.texto, c.limite or { 10 })!
+fn (c Search) run(mut ctx veyfert.CommandContext) ! {
+	hits := c.db.search(c.text, c.limit or { 10 })!
 	ctx.write(
-		content: 'Te quedan ${c.cd.remaining} búsquedas'
-		embeds:  [veyfert.Embed{ title: 'Resultados', description: hits.join('\n') }]
+		content: '${c.cd.remaining} searches left'
+		embeds:  [discord.Embed{ title: 'Results', description: hits.join('\n') }]
 	)!
 }
 
@@ -204,9 +206,9 @@ fn main() {
 	db := &Db{}
 	mut bot := veyfert.new_client(token: os.getenv('DISCORD_TOKEN'), intents: .guilds)
 	bot.commands.add(Ping{})
-	bot.commands.add(Buscar{ db: db })
-	bot.on[veyfert.Ready](fn (e veyfert.Ready, mut c veyfert.Client) ! {
-		c.log.info('Conectado como ${e.user.username}')
+	bot.commands.add(Search{ db: db })
+	bot.on[discord.Ready](fn (e discord.Ready, mut c veyfert.Client) ! {
+		c.logger.info('Connected as ${e.user.username}')
 	})
 	bot.upload_commands(cache_path: '.veyfert/commands.json')!
 	bot.run()!
@@ -214,462 +216,460 @@ fn main() {
 ```
 
 ```v
-// Subcomandos: el árbol se declara con tipos
-@[veyfert.Declare(name: 'config', description: 'Ajustes del servidor')]
+// Subcommands: the tree is declared with types
+@[veyfert.Declare(name: 'config', description: 'Server settings')]
 struct Config {
 mut:
-	idioma Idioma     @[veyfert.Sub]
-	mod    Moderacion @[veyfert.Sub] // Moderacion tiene sus propios @[Sub], así que es un grupo
+	language Language   @[veyfert.Sub]
+	mod      Moderation @[veyfert.Sub] // Moderation has @[Sub] fields of its own, so it is a group
 }
 
-// Modal: los campos son los inputs; al enviarlo llega relleno
-@[veyfert.Modal(custom_id: 'feedback', title: 'Tu opinión')]
+// A modal: the fields are the inputs; when it is sent, it arrives filled
+@[veyfert.Modal(custom_id: 'feedback', title: 'Your feedback')]
 struct Feedback {
 mut:
-	texto string  @[veyfert.Label: 'Cuéntanos'; veyfert.Paragraph]
-	email ?string @[veyfert.Label: 'Email (opcional)']
+	text  string  @[veyfert.Label: 'Tell us'; veyfert.Paragraph]
+	email ?string @[veyfert.Label: 'Email (optional)']
 }
 
 fn (f Feedback) submit(mut ctx veyfert.ModalContext) ! {
-	ctx.write(content: 'Gracias', ephemeral: true)!
+	ctx.write(content: 'Thanks', ephemeral: true)!
 }
 
-// Dentro de un comando: esperar el siguiente mensaje del mismo usuario
-resp := ctx.client.wait_for[veyfert.MessageCreate](
-	filter:  fn [uid] (m veyfert.MessageCreate) bool { return m.author.id == uid }
-	timeout: 30 * time.second
-) or {
-	ctx.followup(content: 'Se acabó el tiempo')!
+// Inside a command: wait for the next message of the same user
+uid := ctx.author().id
+resp := ctx.client.wait_for[discord.MessageCreate](fn [uid] (m discord.MessageCreate) bool {
+	return m.author.id == uid
+}, 30 * time.second) or {
+	ctx.followup(content: 'Time is up')!
 	return
 }
 ```
 
-### 4.3 Comandos por dentro
+### 4.3 Commands inside
 
-- `bot.commands.add(proto)` es genérico (`add[T Command]`). Al compilar recorre `T.attributes` y
-  `T.fields`, genera el JSON de Discord y guarda un `Bound[T]{ proto }` detrás de una interfaz.
-- Al llegar la interacción, copia el prototipo, de modo que las dependencias viajan en la copia. Esas
-  dependencias tienen que ser referencias (`&Db`) o valores baratos de copiar. Después rellena las
-  opciones y corre los guards globales, los del comando, `run` y los hooks.
-- Validación al compilar, con `$compile_error`: tipo de campo no soportado, opción fuera de `mut:` y
-  árboles de más de tres niveles. Las longitudes y los límites de Discord se validan al registrar,
-  porque V todavía no permite usar los valores de un esquema en un `$if`.
-- Autocomplete: un método opcional `autocomplete(mut ctx veyfert.AutocompleteContext) !`. El contexto
-  indica qué opción tiene el foco.
+- `bot.commands.add(proto)` is generic. At compile time it walks `T.attributes` and `T.fields`,
+  generates Discord's JSON and keeps a `Bound[T]{ proto }` behind an interface.
+- When the interaction arrives, it copies the prototype, so dependencies travel in the copy. Those
+  dependencies must be references (`&Db`) or values that are cheap to copy. Then it fills the options
+  and runs the global guards, the command's guards, `run` and the hooks.
+- Compile-time validation, with `$compile_error`: unsupported field types and options outside `mut:`.
+  Lengths, Discord's limits and trees deeper than three levels are validated at registration,
+  because V cannot yet use a schema's values in a `$if`.
+- Autocomplete: an optional method `autocomplete(mut ctx veyfert.AutocompleteContext) !`. The context
+  says which option has the focus.
 
-### 4.4 Eventos y concurrencia
+### 4.4 Events and concurrency
 
 ```
-gateway ─► hilo lector (1 por shard) ──canal──► pool de handlers (N hilos) ──► REST
-           · decodifica el sobre                · listeners on[T]                (bloqueante,
-           · decodifica d solo si hace falta    · comandos, guards y modales      rate limit
-           · muta la caché (orden por guild)    · wait_for (puede bloquear)       compartido)
-           · resuelve wait_for y colectores
-hilo de heartbeat por shard · cola de identify global (max_concurrency, 5 s) · pool aparte para interacciones (3 s)
+gateway ─► reader thread (1 per shard) ──channel──► handler pool (N threads) ──► REST
+           · decodes the envelope                  · on[T] listeners             (blocking,
+           · decodes d only when needed            · commands, guards, modals     shared
+           · updates the cache (per-guild order)   · wait_for (may block)         rate limit)
+           · resolves wait_for and collectors
+heartbeat thread per shard · global identify queue (max_concurrency, 5 s) · a separate pool for interactions (3 s)
 ```
 
-- El lector decodifica el sobre (`op`, `s`, `t` y `d` con `@[raw]`) y solo decodifica `d` si la caché
-  o algún listener lo necesitan.
-- La caché se muta en el hilo del shard, así que el orden por guild está garantizado mientras no se
-  cambie el número de shards.
-- Listeners, comandos y componentes pasan al pool por un canal acotado, que aplica contrapresión.
-  Las interacciones tienen un pool propio porque Discord da 3 segundos para responder.
-- `wait_for` se resuelve en el hilo del shard, así que no ocupa hilos del pool, ni siquiera con un solo
+- The reader decodes the envelope (`op`, `s`, `t` and `d` with `@[raw]`) and decodes `d` only when
+  the cache or some listener needs it.
+- The cache is updated on the shard's thread, so per-guild ordering is guaranteed as long as the
+  shard count does not change.
+- Listeners, commands and components reach the pool through a bounded channel, which applies
+  backpressure. Interactions have their own pool because Discord gives 3 seconds to answer.
+- `wait_for` is resolved on the shard's thread, so it takes no pool threads, not even with a single
   worker.
-- `workers: 1` da semántica secuencial a quien no quiera pensar en concurrencia. Por defecto hay varios
-  hilos, y los handlers que comparten estado lo protegen con `shared` o `sync`. Los tests corren con
-  `-race` en Linux, porque `-race` no existe en Windows.
+- `workers: 1` gives sequential semantics to whoever does not want to think about concurrency. By
+  default there are several threads, and handlers that share state protect it with `shared` or
+  `sync`. The tests run with `-race` on Linux and macOS, because `-race` does not exist on Windows.
 
 ### 4.5 Gateway
 
-Es un port directo de `shard.ts`:
+It is a direct port of `shard.ts`:
 
-- heartbeat con jitter y detección de zombi;
-- reanudación con `resume_gateway_url`;
-- la tabla de close codes de Seyfert (4004 y 4010–4014 no reconectan);
-- cola de envío offline y límite de 120 envíos por 60 s;
-- cola de identify por `max_concurrency`, uno cada 5 s;
-- `request_guild_members` por nonce con timeout;
-- presence, voice state update y compresión de payload con zlib.
+- heartbeat with jitter and zombie detection;
+- resuming through `resume_gateway_url`;
+- Seyfert's close code table (4004 and 4010–4014 do not reconnect);
+- an offline send queue and a limit of 120 sends per 60 s;
+- an identify queue by `max_concurrency`, one every 5 s;
+- `request_guild_members` by nonce with a timeout;
+- presence, voice state updates and zlib payload compression.
 
-El logger de `net.websocket` escribe INFO por defecto (✅), así que se le pasa uno propio.
-`max_message_bytes`, que vale 8 MiB por defecto, se expone como opción.
+`net.websocket`'s logger writes INFO by default (✅), so it gets its own. `max_message_bytes`, which
+defaults to 8 MiB, is exposed as an option.
 
 ### 4.6 REST
 
-- `request[T](method, path, opts) !T` sobre una interfaz `Transport`: por defecto `net.http`, y un
-  mock en los tests.
-- El rate limit sigue el de Seyfert. La clave `METODO:ruta` se reasigna al hash de
-  `x-ratelimit-bucket` más el parámetro mayor. Hay un límite global por token (`ratelimit.TokenBucket`),
-  un 429 espera su `retry_after`, los 502/503 se reintentan tres veces y `/interactions` queda exento
-  del global.
-- Multipart propio (`payload_json` + `files[n]`), porque `http.post_multipart_form` solo hace POST y
-  editar un mensaje con adjuntos es un PATCH.
-- `X-Audit-Log-Reason`, `User-Agent: DiscordBot (url, versión)`, helpers de CDN (un hash `a_` es gif;
-  tamaños) y observadores.
+- `request(method, path, opts) !string` over a `Transport` interface: `net.http` by default, and a mock
+  in tests.
+- The rate limit follows Seyfert's. The key `METHOD:route` is remapped to the `x-ratelimit-bucket`
+  hash plus the major parameter. There is a global limit per token (`ratelimit.TokenBucket`), a 429
+  waits for its `retry_after`, 502/503 are retried three times and `/interactions` is exempt from the
+  global limit.
+- Our own multipart (`payload_json` + `files[n]`), because `http.post_multipart_form` only does POST
+  and editing a message with attachments is a PATCH.
+- `X-Audit-Log-Reason`, `User-Agent: DiscordBot (url, version)`, CDN helpers (an `a_` hash is a gif;
+  sizes) and observers.
 
-### 4.7 Modelos y JSON
+### 4.7 Models and JSON
 
-| Problema | Solución | Estado |
+| Problem | Solution | Status |
 |---|---|---|
-| IDs de 64 bits que llegan como string | `struct Snowflake { value u64 }` con `to_json`, `from_json_string` y `from_json_number` públicos; acepta string o número | ✅ |
-| Distinguir ausente de `null` en un PATCH | `?Nullable[T]`: `none` se omite y `{is_null: true}` escribe `null` | ✅ |
-| Uniones discriminadas por `type` (componentes, canales, interacciones, opciones) | `json2` solo discrimina con `"_type"` y no se puede configurar. Se usan modelos planos como los de Discord (un campo `kind` + opcionales) y vistas tipadas donde haga falta un `match` exhaustivo | ✅ el límite · 🧪 las vistas |
-| Gateway | Sobre con `d @[raw]`, `decode_standard[T]` y un `DecodeBuffer` reutilizado por shard | ✅ |
-| Bitfields | Enums `@[flag]`; los permisos llegan como string y se convierten desde `u64` | ✅ |
+| 64-bit IDs that arrive as strings | `struct Snowflake { value u64 }` with public `to_json`, `from_json_string` and `from_json_number`; accepts a string or a number | ✅ |
+| Telling absent from `null` in a PATCH | `?Nullable[T]`: `none` is left out and `{is_null: true}` writes `null` | ✅ |
+| Unions discriminated by `type` (components, channels, interactions, options) | `json2` only discriminates with `"_type"`, and that cannot be configured. Flat models like Discord's (a `kind` field + optionals) are used, plus `RawJson.decode[T]()` where a typed view is needed | ✅ |
+| Gateway | An envelope with `d @[raw]`, `decode_standard[T]` and a `DecodeBuffer` reused per shard | ✅ |
+| Bitfields | `@[flag]` enums; permissions arrive as strings and are converted from `u64` | ✅ |
 
-### 4.8 Caché, estructuras y shorters
+### 4.8 Cache, structures and shorters
 
-- Caché en memoria tipada y sin serializar: un mapa por recurso detrás de un `sync.RwMutex`, con los
-  mensajes en un anillo por canal. Es sensible a intents, desactivable por recurso y con
-  `track_member_count` opcional.
-- Adaptadores externos (Redis…) solo cuando alguien los pida: una interfaz sobre JSON serializado y la
-  suite de conformidad de Seyfert portada a `v test`.
-- Los shorters son cache-first sobre los endpoints generados. Las estructuras que llegan por eventos y
-  contextos traen el cliente enlazado en un campo `@[skip]`, rellenado por un recorrido comptime. Eso
-  permite `msg.reply(...)` y `member.ban(...)`. 🧪
+- A typed, unserialized in-memory cache: one map per resource behind a `sync.RwMutex`, with the last
+  messages of each channel. It is intent-aware, each resource can be turned off, and member counts
+  are tracked.
+- External adapters (Redis…) only when someone asks for them: an interface over serialized JSON and
+  Seyfert's conformance suite ported to `v test`.
+- Shorters are cache-first over the REST endpoints. The original idea was to give structures that
+  arrive through events and contexts a client linked in a `@[skip]` field, filled by a comptime walk,
+  for `msg.reply(...)` and `member.ban(...)`. That was dropped: see the phase 5 decision.
 
-### 4.9 Componentes, modales y colectores
+### 4.9 Components, modals and collectors
 
-- Un struct `Component` plano con constructores
-  (`veyfert.button(style: .primary, label: 'Sí', custom_id: 'si')`), Components v2 completos y el flag
-  `IS_COMPONENTS_V2` (1 << 15).
-- `Embed.validate()` comprueba los límites al enviar: título de 256, descripción de 4096, 25 campos y
-  6000 caracteres en total.
-- Modales como structs: `ctx.modal(Feedback{})!` genera los inputs desde los campos, y al enviar el
-  modal `submit` recibe `Feedback` relleno.
-- `ctx.wait_for_component(message_id, timeout:, filter:)` sustituye a los colectores.
+- A flat `Component` struct with constructors
+  (`discord.button(style: .primary, label: 'Yes', custom_id: 'yes')`), complete Components v2 and
+  the `IS_COMPONENTS_V2` flag (1 << 15).
+- `Embed.validate()` checks the limits when sending: a title of 256, a description of 4096, 25 fields
+  and 6000 characters in total.
+- Modals as structs: `ctx.modal(Feedback{})!` builds the inputs from the fields, and when the modal is
+  sent, `submit` receives `Feedback` filled in.
+- `ctx.wait_for_component(timeout:, custom_id:)` replaces collectors.
 
 ### 4.10 i18n
 
-`Langs[T]` es genérico: mapea locale → `T`, con alias, fallback y `prefer_guild_locale`. `T` es un struct
-del usuario con todos sus campos `@[required]`, así que si un idioma olvida una clave no compila. Las
-localizaciones del nombre y la descripción de los comandos salen de esos mismos structs. ✅ Compilan
-las constantes con campos de tipo función.
+`Langs[T]` is generic: it maps locale → `T`, with aliases, a fallback and `prefer_guild_locale`. `T` is
+a user struct with all its fields `@[required]`, so a language that forgets a key does not compile.
+The localizations of command names and descriptions come from those same structs. ✅ Constants with
+function-typed fields compile.
 
-### 4.11 Plugins, errores y logs
+### 4.11 Plugins, errors and logs
 
-- `interface Plugin { name() string; setup(mut c Client) !; teardown(mut c Client) ! }`, con teardown
-  en orden inverso. Los plugins usan la API pública del cliente más listas de hooks: observadores de
-  REST y de comandos, e interceptores del gateway.
-- Requisitos con `semver` y registro `shared` tipado cuando haya un plugin que los necesite, no antes.
-- Plugins oficiales: cooldown (un guard sobre `TokenBucket`) y scheduler.
+- `interface Plugin { name() string; setup(mut c Client) !; teardown(mut c Client) ! }`, with teardown
+  in reverse order. Plugins use the client's public API plus hook lists: REST and command observers,
+  and gateway interceptors.
+- Requirements with `semver` and a typed `shared` registry when a plugin needs them, not before.
+- Official plugins: cooldown (a guard) and scheduler.
 
-### 4.12 Interacciones por HTTP
+### 4.12 Interactions over HTTP
 
-El submódulo `veyfert.server` verifica `X-Signature-Ed25519` sobre `timestamp + body` y responde PING
-con PONG. Para el resto espera en un canal la primera respuesta del handler y la devuelve en la propia
-respuesta HTTP; si no llega en ~2,5 s, contesta con un defer. En Seyfert esta parte está incompleta,
-según su propio `client/AGENTS.md`.
+The `veyfert.server` submodule checks `X-Signature-Ed25519` over `timestamp + body` and answers PING
+with PONG. For everything else, it waits on a channel for the handler's first answer and returns it
+in the HTTP response itself; if none arrives within ~2.5 s, it answers with a defer. In Seyfert this
+part is unfinished, according to its own `client/AGENTS.md`.
 
 ### 4.13 Testing
 
-- `veyfert.testing`: un gateway falso sobre `net.websocket.Server`, un transporte mock que registra las
-  peticiones, fixtures de payloads y aserciones.
-- Tests de no-compilación: un `.vsh` compila casos inválidos y comprueba el mensaje exacto de
-  `$compile_error`.
-- CI en Linux, macOS y Windows; `-race` solo en Linux.
+- `veyfert.testing`: a fake gateway on its own WebSocket server on 127.0.0.1 (`veyfert.testing.ws`;
+  see risk 18), a mock transport that records requests, and payload fixtures.
+- Compile-fail tests: a `.vsh` compiles invalid cases and checks the exact `$compile_error` message.
+- CI on Linux, macOS and Windows; `-race` on Linux and macOS.
 
-## 5. Estructura del repositorio
+## 5. Repository layout
 
 ```
 veyfert/
 ├── v.mod  README.md  CHANGELOG.md  LICENSE
 ├── client.v                 # module veyfert: Client, ClientOptions, interactions, upload
-├── gateway.v                # Shard: conexión, heartbeat, resume, close codes, envío con interceptores
-├── gateway_manager.v        # shards, cola de identify, presence, voice, members, sesiones guardadas
-├── gateway_zstd_*.v         # zstd-stream con -d veyfert_zstd, o un stub sin él
-├── dispatch.v               # caché → colectores → pool; on/once/wait_for/emit; duplicados
-├── lifecycle.v              # eventos del framework (BOT_READY…) y presence del gateway
+├── gateway.v                # Shard: connection, heartbeat, resume, close codes, sends through interceptors
+├── gateway_manager.v        # shards, identify queue, presence, voice, members, saved sessions
+├── gateway_zstd_*.v         # zstd-stream with -d veyfert_zstd, or a stub without it
+├── dispatch.v               # cache → collectors → pool; on/once/wait_for/emit; duplicates
+├── lifecycle.v              # the framework's events (BOT_READY…) and the gateway's presence
 ├── commands.v  context.v  guards.v  interactions.v  inline.v  prefix.v  langs.v  plugins.v  shorters.v
-├── *_test.v                 # tests del framework, junto al código
-├── discord/                 # module veyfert.discord: modelos, eventos, componentes, embeds,
-│                            #   polls, permisos, intents, snowflakes, CDN, archivos
-├── rest/                    # module veyfert.rest: Transport, rate limits, multipart, errores
-│   └── api/                 # module veyfert.rest.api: GENERADO, una función por endpoint
-├── cache/                   # module veyfert.cache: la caché en memoria
-├── plugins/                 # module veyfert.plugins: plugins oficiales (Scheduler)
-├── server/                  # module veyfert.server: interacciones por HTTP
-├── testing/                 # module veyfert.testing: gateway y REST falsos, payloads
-│   └── ws/                  #   servidor WebSocket en 127.0.0.1
+├── *_test.v                 # the framework's tests, next to the code
+├── discord/                 # module veyfert.discord: models, events, components, embeds,
+│                            #   polls, permissions, intents, snowflakes, CDN, files
+├── rest/                    # module veyfert.rest: Transport, rate limits, multipart, errors
+│   └── api/                 # module veyfert.rest.api: GENERATED, one function per endpoint
+├── cache/                   # module veyfert.cache: the in-memory cache
+├── plugins/                 # module veyfert.plugins: official plugins (Scheduler)
+├── server/                  # module veyfert.server: interactions over HTTP
+├── testing/                 # module veyfert.testing: fake gateway and REST, payloads
+│   └── ws/                  #   WebSocket server on 127.0.0.1
 ├── examples/{basic,components}/
-├── tests/compile_fail/      # casos que deben fallar con un mensaje exacto (compile_fail.vsh)
-├── tools/gen_api.vsh        # generador desde discord-api-spec (commit fijado)
+├── tests/compile_fail/      # cases that must fail with an exact message (compile_fail.vsh)
+├── tools/gen_api.vsh        # generator from discord-api-spec (pinned commit)
 ├── benchmarks/decode/
 ├── docs/PLAN.md
 └── .github/workflows/ci.yml
 ```
 
-## 6. Fases
+## 6. Phases
 
-| Fase | Objetivo | Criterio de salida |
+| Phase | Goal | Exit criterion |
 |---|---|---|
-| 0 | Spike vertical | Un bot real responde `/ping` y `/buscar` en un servidor de pruebas, y `v test .` pasa en Windows y Linux |
-| 1 | Gateway de producción | Tests contra un gateway falso, sin red: cierres 1006, 4000 y 4004, op 7 y op 9. Un bot real aguanta 24 h con la memoria estable |
-| 2 | REST y modelos generados | Tests con transporte mock que reproducen secuencias reales de cabeceras: bucket compartido, 429 global y 502 |
-| 3 | Comandos | Tests de despacho con interacciones de ejemplo, tests de no-compilación y checklist de paridad con la guía de comandos de Seyfert |
-| 4 | Componentes, modales y mensajes | El JSON generado coincide con los ejemplos de la doc de Discord; prueba manual con el bot |
-| 5 | Caché, estructuras y shorters | Tests de consistencia con secuencias de eventos y `-race` limpio en Linux |
-| 6 | Prefijo, i18n, plugins y HTTP | Test HTTP con peticiones firmadas con una clave generada en el propio test |
-| 7 | Producción y publicación | `veyfert.testing` público, docs, ejemplos y benchmarks; CI en los tres sistemas y publicado en VPM |
+| 0 | Vertical spike | A real bot answers `/ping` and `/search` in a test server, and `v test .` passes on Windows and Linux |
+| 1 | Production gateway | Tests against a fake gateway, offline: closes 1006, 4000 and 4004, op 7 and op 9. A real bot holds for 24 h with stable memory |
+| 2 | REST and generated models | Tests with a mock transport that replay real header sequences: shared bucket, global 429 and 502 |
+| 3 | Commands | Dispatch tests with sample interactions, compile-fail tests and a parity checklist against Seyfert's command guide |
+| 4 | Components, modals and messages | The generated JSON matches the examples in Discord's docs; a manual test with the bot |
+| 5 | Cache, structures and shorters | Consistency tests with event sequences and a clean `-race` on Linux |
+| 6 | Prefix, i18n, plugins and HTTP | An HTTP test with requests signed by a key generated in the test itself |
+| 7 | Production and publishing | Public `veyfert.testing`, docs, examples and benchmarks; CI on the three systems and published on VPM |
 
-Las fases 3 a 6 pueden solaparse una vez terminadas la 0, la 1 y la 2, que son las que construyen gateway
-y REST.
+Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gateway and REST.
 
-**Fase 0 — Spike vertical.** Demuestra el camino completo antes de invertir en amplitud.
-- **Estado (23-11-2026): hecha en Windows.** El bot de `examples/basic` subió `/ping` y `/buscar` a un
-  servidor de pruebas, identificó en el gateway, mantuvo el heartbeat y respondió los dos comandos
-  desde Discord. `v test .` pasa. Falta pasarlo en Linux (CI). La prueba destapó dos cosas: el logger
-  de `log` no vacía su búfer por línea si no se le pide (`set_always_flush(true)`), y el riesgo 12.
-- `v.mod`, `.gitignore` (con `.env` y `.veyfert/`) y CI mínimo.
-- `Snowflake`, `Nullable[T]`, `Intents` y `Permissions`; las sondas de esta sesión pasan a `_test.v`.
-- Un shard: HELLO → IDENTIFY → heartbeat → READY, con el sobre y `d @[raw]`.
-- REST mínimo: callback de interacción, `create_message`, `User-Agent` y `DiscordError`.
-- Registro por atributos (`Declare`, `Desc`, `Min`, `Max`) y `upload_commands` a un servidor de pruebas.
-- Requisitos: una aplicación de Discord de pruebas, su token en `DISCORD_TOKEN` (nunca en el repo) y un
-  servidor de pruebas.
+**Phase 0 — Vertical spike.** Proves the whole path before investing in breadth.
+- **Status (2026-11-23): done on Windows.** The `examples/basic` bot uploaded `/ping` and `/search` to
+  a test server, identified on the gateway, kept the heartbeat and answered both commands from
+  Discord. `v test .` passes. Linux is left for CI. The test uncovered two things: `log`'s logger
+  does not flush its buffer per line unless asked (`set_always_flush(true)`), and risk 12.
+- `v.mod`, `.gitignore` (with `.env` and `.veyfert/`) and minimal CI.
+- `Snowflake`, `Nullable[T]`, `Intents` and `Permissions`; the session's probes become `_test.v`.
+- One shard: HELLO → IDENTIFY → heartbeat → READY, with the envelope and `d @[raw]`.
+- Minimal REST: the interaction callback, `create_message`, `User-Agent` and `DiscordError`.
+- Registration through attributes (`Declare`, `Desc`, `Min`, `Max`) and `upload_commands` to a test
+  server.
+- Requirements: a test Discord application, its token in `DISCORD_TOKEN` (never in the repo) and a
+  test server.
 
-**Fase 1 — Gateway de producción.**
-- **Estado (24-11-2026): hecha en Windows, salvo la prueba de 24 h.** Hay 12 escenarios contra un
-  gateway falso, sin red: 1006, 4000, 4004, 4009, op 7, op 9 reanudable y no reanudable, zombi, cola
-  offline, chunks de miembros, carga de guilds y payloads con zlib. También hay 6 tests de despacho.
-  Todos pasan, estables en dos pasadas.
-- Contra Discord real: el bot arrancó con presence y `BOT_READY`, `request_members` por ID devolvió
-  el miembro y `reconnect(0)` reanudó la sesión. `stop()` cierra limpio. Desde Discord, `/yo` y
-  `/reconectar` respondieron, la sesión se reanudó en 0,4 s y `/ping` siguió respondiendo después.
-  Estuvo 30 minutos en línea sin desconexiones no provocadas.
-- Benchmark (`benchmarks/decode`, `-prod`): READY de 2500 guilds en 1,7 ms; GUILD_CREATE de 1000
-  miembros (281 KiB) en 3,6 ms; MESSAGE_CREATE en 4 µs. Son unos 70 MiB/s con `json2`.
-- Los filtros de duplicados de member y presence se hicieron en la fase 5, y `max_message_bytes`
-  es una opción del cliente desde la fase 7. Falta pasarlo en Linux y con `-race` (CI).
-- Resume y reconexión con la tabla de close codes de `shard.ts`, detección de zombi, timeout de conexión
-  y cola de envío offline.
-- Varios shards en un proceso, con cola de identify por `max_concurrency`, rango de shards (`start`,
-  `end`, `total`), presence por shard y el límite de 120 envíos por 60 s.
-- `request_guild_members` (nonce, chunks, timeout), voice state update y compresión de payload con zlib.
-- Despacho: `on[T]`, `once[T]`, `RAW`, `emit[T]` para eventos propios, `GUILDS_READY`, `BOT_READY` y
-  `SHARD_DISCONNECT`/`SHARD_RECONNECT`. Decodificación perezosa y filtros de duplicados de member y
-  presence.
-- Benchmark de decodificación: READY, un GUILD_CREATE grande y MESSAGE_CREATE.
+**Phase 1 — Production gateway.**
+- **Status (2026-11-24): done on Windows, except the 24 h run.** There are 12 scenarios against a fake
+  gateway, offline: 1006, 4000, 4004, 4009, op 7, resumable and non-resumable op 9, zombie, offline
+  queue, member chunks, guild loading and zlib payloads. There are also 6 dispatch tests. All pass,
+  stable over two runs.
+- Against real Discord: the bot started with a presence and `BOT_READY`, `request_members` by ID
+  returned the member and `reconnect(0)` resumed the session. `stop()` closes cleanly. From Discord,
+  `/me` and `/reconnect` answered, the session resumed in 0.4 s and `/ping` kept answering after.
+  It stayed online for 30 minutes with no unprovoked disconnections.
+- Benchmark (`benchmarks/decode`, `-prod`): a READY of 2500 guilds in 1.7 ms; a GUILD_CREATE of 1000
+  members (281 KiB) in 3.6 ms; a MESSAGE_CREATE in 4 µs. That is about 70 MiB/s with `json2`.
+- The member and presence duplicate filters were done in phase 5, and `max_message_bytes` is a client
+  option since phase 7. Linux and `-race` are left for CI.
+- Resume and reconnection with `shard.ts`'s close code table, zombie detection, a connection timeout
+  and an offline send queue.
+- Several shards in one process, with an identify queue by `max_concurrency`, shard ranges (`start`,
+  `end`, `total`), presence per shard and the limit of 120 sends per 60 s.
+- `request_guild_members` (nonce, chunks, timeout), voice state updates and zlib payload compression.
+- Dispatch: `on[T]`, `once[T]`, `RAW`, `emit[T]` for custom events, `GUILDS_READY`, `BOT_READY` and
+  `SHARD_DISCONNECT`/`SHARD_RECONNECT`. Lazy decoding and the member and presence duplicate filters.
+- A decoding benchmark: READY, a large GUILD_CREATE and MESSAGE_CREATE.
 
-**Fase 2 — REST y modelos generados.**
-- **Estado (24-11-2026): hecha en Windows.** `rest.v` tiene un `Transport` intercambiable, buckets
-  aprendidos (un bucket compartido recibe las cabeceras de todas sus rutas), un límite global de
-  50/s con bloqueo ante un 429 global (las interacciones quedan exentas), reintentos de 502/503,
-  multipart propio, `X-Audit-Log-Reason`, observadores y CDN. Hay 10 tests con transporte simulado.
-- `tools/gen_api.vsh` lee la spec fijada (`3a21a01`) y genera 447 structs, 68 enums enteros y 247
-  de 250 endpoints. Omite los 3 que solo aceptan cuerpo multipart y 18 parámetros de query que son
-  arrays. Contra Discord real decodificó usuario, aplicación, servidor y mensajes.
-- Decisiones: los campos enum son `int`/`string`, porque Discord añade valores y `json2` rechaza los
-  desconocidos; los enums se generan aparte para comparar. Lo que la spec modela como unión
-  (canales, componentes) llega como `RawJson`; las vistas tipadas son de la fase 5.
-- Hecho en la fase 7: en los cuerpos de PATCH, los 84 campos que admiten `null` se generan como
-  `?Nullable[T]` (`none` lo deja igual, `{is_null: true}` lo borra). Los enums de texto siguen
-  sin generarse.
-- `tools/gen_api.vsh` sobre discord-api-spec en un commit fijado: modelos y una función por endpoint,
-  con overrides a mano donde la spec falle.
-- Rate limiter completo (ver 4.6), multipart propio, `X-Audit-Log-Reason`, `request[T]`, CDN y
-  observadores.
+**Phase 2 — REST and generated models.**
+- **Status (2026-11-24): done on Windows.** `rest.v` has a swappable `Transport`, learned buckets (a
+  shared bucket gets the headers of all its routes), a global limit of 50/s that blocks after a
+  global 429 (interactions are exempt), 502/503 retries, our own multipart, `X-Audit-Log-Reason`,
+  observers and CDN helpers. There are 10 tests with a mock transport.
+- `tools/gen_api.vsh` reads the pinned spec (`3a21a01`) and generates 447 structs, 68 integer enums and
+  247 of 250 endpoints. It leaves out the 3 that only take a multipart body and 18 query parameters
+  that are arrays. Against real Discord it decoded the user, the application, a guild and messages.
+- Decisions: enum fields are `int`/`string`, because Discord adds values and `json2` rejects unknown
+  ones; the enums are generated apart for comparisons. What the spec models as a union (channels,
+  components) arrives as `RawJson`, which `RawJson.decode[T]()` turns into a model.
+- Done in phase 7: in PATCH bodies, the 84 fields that accept `null` are generated as `?Nullable[T]`
+  (`none` leaves the value as it is, `{is_null: true}` clears it). String enums are still not
+  generated.
+- `tools/gen_api.vsh` over discord-api-spec at a pinned commit: models and one function per endpoint,
+  with hand-written overrides where the spec falls short.
+- A complete rate limiter (see 4.6), our own multipart, `X-Audit-Log-Reason`, `request`, CDN helpers
+  and observers.
 
-**Fase 3 — Comandos.**
-- **Estado (24-11-2026): hecha en Windows.** `commands.v` registra árboles de tipos (`@[Sub]`, con
-  grupos un nivel por debajo del comando), menús de usuario y de mensaje, y opciones de los 13
-  tipos de campo con `Min`/`Max`, `MinLength`/`MaxLength`, `Channels`, `Autocomplete` y `Label`
-  en los valores de enum. Los guards son campos cuyo tipo implementa `Guard` (sin `@[Use]`, ver
-  riesgo 15). Corren en este orden: permisos del bot, opciones, globales, los de los grupos y los
-  del comando. Hay `stop`/`deny`, `Cooldown` y `RequirePermissions`, hooks por método
-  (`on_run_error`, `on_options_error`, `on_guard_error`, `on_bot_permissions_fail`) y
-  `CommandDefaults` en el cliente. También `Perms`, `BotPerms`, `Nsfw`, `Guilds`, `Contexts` e
-  `Integrations`, y upload por ámbito (global y por servidor).
-- 15 tests de despacho con interacciones de ejemplo y 3 de no-compilación
-  (`v run tests/compile_fail.vsh`). Contra Discord real, el servidor aceptó los 8 comandos del
-  ejemplo: el árbol `/config`, los dos menús, autocomplete, tipos de canal y longitudes.
-- Tiempo de compilación: un bot de 100 comandos (cada uno con cooldown, un enum, un `User` y dos
-  opciones más) compila en 12,2 s, frente a 5,7 s con uno; son unos 65 ms por comando, y el
-  binario pasa de 3,4 a 4,1 MB.
-- Quedan para otras fases: `modal` en los contextos (fase 4), `guild()`/`channel()` desde la
-  caché (fase 5) y los comandos entry point.
-- El tipo del campo decide el tipo de opción: `string`, `int`, `f64`, `bool`, `User`, `Member`, `Role`,
-  `Channel`, `Mentionable` o `Attachment`. `?T` la vuelve opcional y un enum genera las choices, con
-  nombres localizables mediante atributos en los valores. Además `Min`/`Max`, `MinLength`/`MaxLength` y
-  `ChannelTypes`.
-- Autocomplete, subcomandos y grupos como árbol de tipos, y menús contextuales de usuario y de mensaje.
-  Los comandos entry point quedan para el final.
-- Contextos con `write`, `defer_reply`, `edit_response`, `delete_response`, `followup`, `fetch_response`,
-  `edit_or_reply`, `modal` y ephemeral, más `author`, `member`, `guild` y `channel`.
-- Guards por campo y globales, hooks opcionales y defaults del cliente. Permisos
-  (`default_member_permissions`, y permisos del bot con `on_bot_permissions_fail`), `integration_types`,
-  `contexts`, `nsfw`, comandos por guild y upload con caché por hash.
-- Las validaciones de 4.3. Medir el tiempo de compilación con 100 comandos sintéticos.
+**Phase 3 — Commands.**
+- **Status (2026-11-24): done on Windows.** `commands.v` registers type trees (`@[Sub]`, with groups
+  one level below the command), user and message menus, and options of 13 field types with
+  `Min`/`Max`, `MinLength`/`MaxLength`, `Channels`, `Autocomplete` and `Label` on enum values. Guards
+  are fields whose type implements `Guard` (no `@[Use]`, see risk 15). They run in this order: the
+  bot's permissions, options, global guards, the groups' guards and the command's own. There are
+  `stop`/`deny`, `Cooldown` and `RequirePermissions`, hook methods (`on_run_error`,
+  `on_options_error`, `on_guard_error`, `on_bot_permissions_fail`) and `CommandDefaults` on the
+  client. Also `Perms`, `BotPerms`, `Nsfw`, `Guilds`, `Contexts` and `Integrations`, and uploads per
+  scope (global and per server).
+- 15 dispatch tests with sample interactions and 3 compile-fail tests
+  (`v run tests/compile_fail.vsh`). Against real Discord, the server accepted the example's 8
+  commands: the `/config` tree, both menus, autocomplete, channel types and lengths.
+- Compile time: a bot with 100 commands (each with a cooldown, an enum, a `User` and two more options)
+  compiles in 12.2 s, against 5.7 s with one; that is about 65 ms per command, and the binary goes
+  from 3.4 to 4.1 MB.
+- Left for other phases: `modal` on the contexts (phase 4), `guild()`/`channel()` from the cache
+  (phase 5) and entry point commands.
+- The field's type sets the option type: `string`, `int`, `f64`, `bool`, `User`, `Member`, `Role`,
+  `Channel`, `Mentionable` or `Attachment`. `?T` makes it optional and an enum generates the choices,
+  with names localizable through attributes on the values. Also `Min`/`Max`, `MinLength`/`MaxLength`
+  and channel types.
+- Autocomplete, subcommands and groups as a type tree, and user and message context menus. Entry
+  point commands are left for the end.
+- Contexts with `write`, `defer_reply`, `edit_response`, `delete_response`, `followup`,
+  `fetch_response`, `edit_or_reply`, `modal` and ephemeral answers, plus `author`, `member`, `guild`
+  and `channel`.
+- Per-field and global guards, optional hooks and client defaults. Permissions
+  (`default_member_permissions`, and the bot's permissions with `on_bot_permissions_fail`),
+  `integration_types`, `contexts`, `nsfw`, per-guild commands and uploads with a hash cache.
+- The validations of 4.3. Measure the compile time with 100 synthetic commands.
 
-**Fase 4 — Componentes, modales y mensajes.**
-- **Estado (24-11-2026): hecha en Windows, salvo la prueba manual de modales.** `components.v` tiene
-  un `Component` plano con constructores para los 20 tipos: los de v1, los de Components v2 y los
-  de modal (`label`, `file_upload`, `radio_group`, `checkbox_group`, `checkbox`). El hijo único de
-  `section` y `label` va ya codificado, porque V no admite structs que se contengan a sí mismos.
-  `IS_COMPONENTS_V2` se pone solo cuando hay componentes v2. También están `Embed` completo con
-  `validate()`, que se comprueba al enviar, polls, `allowed_mentions`, `tts`, flags y adjuntos
-  (`file_from_path`, `file_from_url`).
-- `interactions.v` enruta los handlers por `CustomId` exacto o por el `CustomIdPrefix` más largo.
-  `ComponentContext` tiene `update` y `defer_update`. Los modales son structs (`@[Modal]`, con
-  campos `@[Label]` de tipo string, ?string o enum, que se convierte en select): `ctx.modal(form)`
-  los genera rellenando los valores y el envío llega al struct relleno, tanto en el formato con
-  labels como en el antiguo con action rows. `wait_for_component` y `wait_for_modal` se quedan con
-  la interacción, que ya no llega a los handlers.
-- 9 tests y uno de adjuntos. Contra Discord real se publicaron y borraron tres mensajes: uno v1
-  con embed completo, botones y selects; uno v2 con contenedor, sección con miniatura, separador,
-  galería y archivo adjunto por multipart; y una encuesta. Los modales necesitan que alguien los
-  abra en Discord: `examples/components` los trae.
-- Adelantado de la fase 5: `c.messages` con `write`, `edit`, `delete` y `fetch`.
-- `Component` plano con constructores, Components v2 completos e `IS_COMPONENTS_V2`. `Embed.validate()`,
-  polls, adjuntos (bytes, ruta o URL) y `allowed_mentions`.
-- Handlers por `custom_id` exacto o por prefijo, modales como structs, `wait_for_component`,
-  `wait_for_modal`, `update` y `defer_update`.
+**Phase 4 — Components, modals and messages.**
+- **Status (2026-11-24): done on Windows, except the manual test of modals.** `components.v` has a
+  flat `Component` with constructors for the 20 types: v1, Components v2 and modal ones (`label`,
+  `file_upload`, `radio_group`, `checkbox_group`, `checkbox`). The single child of `section` and
+  `label` is stored already encoded, because V structs cannot contain themselves.
+  `IS_COMPONENTS_V2` is set by itself when there are v2 components. There are also a complete
+  `Embed` with `validate()`, checked when sending, polls, `allowed_mentions`, `tts`, flags and
+  attachments (`file_from_path`, `file_from_url`).
+- `interactions.v` routes handlers by an exact `CustomId` or the longest `CustomIdPrefix`.
+  `ComponentContext` has `update` and `defer_update`. Modals are structs (`@[Modal]`, with `@[Label]`
+  fields of type string, ?string or an enum, which becomes a select): `ctx.modal(form)` builds them
+  prefilled with the values, and a submission arrives as the filled struct, both in the format with
+  labels and in the older one with action rows. `wait_for_component` and `wait_for_modal` take the
+  interaction, which then skips the handlers.
+- 9 tests and one for attachments. Against real Discord, three messages were posted and deleted: a v1
+  one with a full embed, buttons and selects; a v2 one with a container, a section with a thumbnail,
+  a separator, a gallery and a file attached through multipart; and a poll. Modals need someone to
+  open them in Discord: `examples/components` has them.
+- Brought forward from phase 5: `c.messages` with `write`, `edit`, `delete` and `fetch`.
+- A flat `Component` with constructors, complete Components v2 and `IS_COMPONENTS_V2`.
+  `Embed.validate()`, polls, attachments (bytes, path or URL) and `allowed_mentions`.
+- Handlers by exact or prefix `custom_id`, modals as structs, `wait_for_component`,
+  `wait_for_modal`, `update` and `defer_update`.
 
-**Fase 5 — Caché, estructuras y shorters.**
-- **Estado (24-11-2026): hecha en Windows, salvo `-race` (solo Linux).** `cache.v` guarda guilds,
-  canales e hilos (con sus overwrites), roles, usuarios, miembros, emojis, stickers, presences,
-  voice states, stage instances, bans y los últimos N mensajes por canal. Hay un mapa por
-  recurso, cada uno desactivable, detrás de un `RwMutex`, y se actualiza en el hilo del shard
-  antes que los listeners. `events.v` tipa 30 eventos más. Los `GUILD_MEMBER_UPDATE` y
-  `PRESENCE_UPDATE` repetidos en 1,5 s solo llegan a los listeners RAW, como en Seyfert.
-- `shorters.v`: messages, reactions, channels, members, roles, guilds, users, threads, webhooks,
-  bans y emojis (unos 50 métodos). Los `fetch`/`list` leen primero la caché (`force: true` va a
-  Discord) y el motivo de auditoría va en el struct de opciones. `RawJson.decode[T]()` convierte
-  lo que devuelve un endpoint generado en un modelo propio.
-- Decisión: nada de cliente dentro de las estructuras, ni en un campo `@[skip]` relleno por
-  reflexión, porque dejaría punteros nil en los structs creados a mano. Primero las estructuras
-  recibían el cliente (`msg.reply(mut c, ...)`). Desde la división en capas (fase 7), los tipos
-  viven en `veyfert.discord`, y V no permite métodos fuera del módulo del tipo. Por eso esas
-  acciones están en los shorters (`c.messages.reply(msg, ...)`, `c.members.ban(...)`).
-- 9 tests (consistencia de la caché con secuencias de eventos, duplicados y shorters con
-  transporte simulado). Contra Discord real, la caché se llenó con `GUILD_CREATE`; además
-  funcionaron enviar, responder citando, reaccionar, fijar, desfijar, editar, listar reacciones
-  y borrar en bloque, y los eventos de mensaje actualizaron la caché.
-- La caché en memoria de los 13 recursos (ver 4.8).
-- Shorters por prioridad: messages, interactions, channels, members, roles, guilds, threads, reactions,
-  webhooks, bans, emojis y users. Después el resto, hasta cubrir los ~160 métodos de Seyfert.
-- Métodos en las estructuras con el cliente enlazado.
+**Phase 5 — Cache, structures and shorters.**
+- **Status (2026-11-24): done on Windows, except `-race` (Linux and macOS only).** `cache.v` keeps
+  guilds, channels and threads (with their overwrites), roles, users, members, emojis, stickers,
+  presences, voice states, stage instances, bans and the last N messages per channel. There is one
+  map per resource, each of which can be turned off, behind an `RwMutex`, and it is updated on the
+  shard's thread before listeners run. `events.v` types 30 more events. `GUILD_MEMBER_UPDATE` and
+  `PRESENCE_UPDATE` repeated within 1.5 s only reach RAW listeners, as in Seyfert.
+- `shorters.v`: messages, reactions, channels, members, roles, guilds, users, threads, webhooks, bans
+  and emojis (about 50 methods). `fetch`/`list` read the cache first (`force: true` goes to Discord)
+  and the audit log reason goes in the options struct. `RawJson.decode[T]()` turns what a generated
+  endpoint returns into a model.
+- Decision: no client inside the structures, nor in a `@[skip]` field filled by reflection, because it
+  would leave nil pointers in structs created by hand. At first, the structures took the client as an
+  argument (`msg.reply(mut c, ...)`). Since the split by layer (phase 7), the types live in
+  `veyfert.discord`, and V does not allow methods outside a type's module, so those actions are on the
+  shorters (`c.messages.reply(msg, ...)`, `c.members.ban(...)`).
+- 9 tests (cache consistency with event sequences, duplicates and shorters with a mock transport).
+  Against real Discord, the cache filled with `GUILD_CREATE`; sending, replying with a quote,
+  reacting, pinning, unpinning, editing, listing reactions and bulk deleting also worked, and the
+  message events updated the cache.
+- The in-memory cache of the 13 resources (see 4.8).
+- Shorters by priority: messages, interactions, channels, members, roles, guilds, threads, reactions,
+  webhooks, bans, emojis and users. Then the rest, up to Seyfert's ~160 methods.
+- Methods on structures with the client linked.
 
-**Fase 6 — Prefijo, i18n, plugins e interacciones por HTTP.**
-- **Estado (24-11-2026): hecha en Windows.**
-  - **Prefijo (`prefix.v`):** los mismos tipos de comando corren desde mensajes, con
-    `ClientOptions.prefixes`, un `Commands.prefix` dinámico o la mención al bot. También hay alias
-    (`@[Aliases]`) e `@[Ignore('slash'|'prefix')]`. Las opciones van en orden o como `-nombre
-    valor`, y la última de texto toma el resto de la línea. Las choices se aceptan por valor o
-    etiqueta, las menciones e IDs se resuelven como en una interacción (caché primero) y los
-    adjuntos van en orden. Las respuestas son mensajes del canal: `write` responde citando,
-    `defer_reply` muestra "escribiendo" y `edit_response` edita. Los guards ven permisos
-    calculados desde la caché (`Cache.permissions`: roles, owner y overwrites, también de
-    hilos).
-  - **i18n:** `Langs[T]` con alias, idioma base, fallback y `prefer_guild_locale`. `Commands.localize`
-    toma nombres, descripciones y choices de campos `CommandText` (`@[Locale]`). Compilan las
-    constantes con campos función.
-  - **Plugins:** `Plugin` con `install` y teardown en orden inverso al acabar `run`,
-    `Commands.observe` (`CommandEvent` con el resultado) y `Client.intercept` para cambiar o
-    descartar eventos. `Scheduler` es el plugin oficial; el cooldown ya era un guard.
-  - **`veyfert.server`:** verifica la firma Ed25519, responde PING y devuelve en la respuesta HTTP la
-    primera respuesta del handler. A los 2,5 s manda un defer (6 en componentes) y la respuesta
-    tardía edita el defer. Es un servidor HTTP/1.1 propio (riesgo 17).
-- 16 tests nuevos, entre ellos el de HTTP con peticiones firmadas con una clave generada en el test. No
-  probado contra Discord: el prefijo necesita que alguien escriba (`examples/basic` ya lo
-  activa) y el endpoint HTTP, una URL HTTPS registrada en el portal.
-- Comandos por prefijo con las mismas definiciones: alias, parser de argumentos, errores por opción y
-  la opción de ignorar el modo slash o el de mensaje.
-- `Langs[T]` y localizaciones de comandos.
-- Plugins (ver 4.11), con cooldown y scheduler como oficiales.
-- `veyfert.server` (ver 4.12).
+**Phase 6 — Prefix, i18n, plugins and interactions over HTTP.**
+- **Status (2026-11-24): done on Windows.**
+  - **Prefix (`prefix.v`):** the same command types run from messages, with
+    `ClientOptions.prefixes`, a dynamic `Commands.prefix` or a mention of the bot. There are also
+    aliases (`@[Aliases]`) and `@[Ignore('slash'|'prefix')]`. Options come in order or as
+    `-name value`, and the last text option takes the rest of the line. Choices are accepted by value
+    or label, mentions and IDs are resolved as in an interaction (cache first) and attachments go in
+    order. Answers are channel messages: `write` replies with a quote, `defer_reply` shows "typing"
+    and `edit_response` edits. Guards see permissions worked out from the cache
+    (`Cache.permissions`: roles, owner and overwrites, threads included).
+  - **i18n:** `Langs[T]` with aliases, the base language, a fallback and `prefer_guild_locale`.
+    `Commands.localize` takes names, descriptions and choices from `CommandText` fields (`@[Locale]`).
+    Constants with function fields compile.
+  - **Plugins:** `Plugin` with `install` and teardown in reverse order when `run` ends,
+    `Commands.observe` (a `CommandEvent` with the outcome) and `Client.intercept` to change or drop
+    events. `Scheduler` is the official plugin; the cooldown was already a guard.
+  - **`veyfert.server`:** checks the Ed25519 signature, answers PING and returns the handler's first
+    answer in the HTTP response. At 2.5 s it sends a defer (6 for components) and the late answer
+    edits the defer. It is its own HTTP/1.1 server (risk 17).
+- 16 new tests, among them the HTTP one with requests signed by a key generated in the test. Not
+  tested against Discord: the prefix needs someone to type (`examples/basic` turns it on), and the
+  HTTP endpoint needs an HTTPS URL registered in the developer portal.
+- Prefix commands with the same definitions: aliases, an argument parser, errors per option and the
+  option to ignore the slash or the message mode.
+- `Langs[T]` and command localizations.
+- Plugins (see 4.11), with cooldown and scheduler as official ones.
+- `veyfert.server` (see 4.12).
 
-**Fase 7 — Producción y publicación.**
-- **Estado (24-11-2026): hecha, salvo lo que no depende de esta sesión.**
-  - `veyfert.testing` es público: un gateway falso en 127.0.0.1, `Transport` que graba
-    peticiones y responde por turnos, `client(gw, api)` y payloads (`command_interaction`,
-    `component_interaction`, `modal_submit`, `message_create`).
-  - Documentación: `README.md` es la guía, con la estructura de la de Seyfert, y sus fragmentos
-    se compilan. `v doc` genera la referencia, y quedan los dos ejemplos.
-  - Hay `CHANGELOG.md`, `LICENSE` y CI en `.github/workflows/ci.yml` (Linux, macOS y Windows):
-    formato, tests, zstd, no-compilación y ejemplos con `-W`, más `-race` en Linux y macOS.
-    La política de deprecación está en el README.
-  - Opcionales hechos: guardar la sesión al parar y reanudarla al arrancar (`save_sessions`,
-    `load_sessions`; la caché empieza vacía y `BOT_READY` se emite igual) y `zstd-stream`
-    (`zstd: true`, compilando con `-d veyfert_zstd`, así que no cuesta nada a quien no lo usa).
-  - Reorganización en capas: el núcleo `veyfert` sobre `veyfert.discord`, `veyfert.rest` (con
-    `veyfert.rest.api`) y `veyfert.cache`, más `veyfert.plugins`; ver §0 y §5. Lo hizo un script
-    que cualifica los nombres movidos sin tocar strings ni comentarios.
-  - Se cumplen los dos contratos de §1.3 que faltaban:
-    - (6) cada shorter guarda en la caché lo que devuelve el REST, y lo que borra lo olvida;
-      un mensaje enviado no se duplica cuando llega su `MESSAGE_CREATE`.
-    - (8) `intercept_send` cambia o descarta cualquier payload que envía un shard.
-  - Fuera de la sesión: publicar en VPM (necesita la cuenta y el OK del dueño), la prueba de
-    24 h, ejecutar el CI (no hay repositorio remoto), los benchmarks contra Seyfert y el
-    resharding automático. Ese último lo dejé: reiniciar los shards con otro total en caliente
-    pide reestructurar `run`, y el rango manual (`ShardRange`) cubre los bots grandes de hoy.
-- `veyfert.testing` público.
-- Opcionales: `zstd-stream`, resharding automático y guardar la sesión al parar para reanudarla al
-  arrancar, avisando de que la caché empieza vacía.
-- Documentación (`v doc` y una guía con la misma estructura que la de Seyfert), ejemplos y benchmarks
-  contra Seyfert (RAM por guild y eventos por segundo).
-- CI en Linux, macOS y Windows, publicación en VPM y política de deprecación con `@[deprecated]` y
+**Phase 7 — Production and publishing.**
+- **Status (2026-11-24): done, except what does not depend on this work.**
+  - `veyfert.testing` is public: a fake gateway on 127.0.0.1, a `Transport` that records requests and
+    answers in turn, `client(gw, api)` and payloads (`command_interaction`, `component_interaction`,
+    `modal_submit`, `message_create`).
+  - Documentation: `README.md` is the guide, with the structure of Seyfert's, and its snippets are
+    compiled. `v doc` generates the reference, and there are the two examples.
+  - There are `CHANGELOG.md`, `LICENSE` and CI in `.github/workflows/ci.yml` (Linux, macOS and
+    Windows): formatting, tests, zstd, compile-fail and examples with `-W`, plus `-race` on Linux and
+    macOS. The deprecation policy is in the README.
+  - Optional items done: saving the session when stopping and resuming it on start (`save_sessions`,
+    `load_sessions`; the cache starts empty and `BOT_READY` still fires) and `zstd-stream`
+    (`zstd: true`, built with `-d veyfert_zstd`, so it costs nothing to bots that do not use it).
+  - The split by layer: the `veyfert` core on top of `veyfert.discord`, `veyfert.rest` (with
+    `veyfert.rest.api`) and `veyfert.cache`, plus `veyfert.plugins`; see §0 and §5. A script did it,
+    qualifying the moved names without touching strings or comments.
+  - The two contracts of §1.3 that were missing now hold:
+    - (6) each shorter keeps what REST returns in the cache, and forgets what it deletes; a sent
+      message is not duplicated when its `MESSAGE_CREATE` arrives.
+    - (8) `intercept_send` changes or drops any payload a shard sends.
+  - The repository and its CI are on GitHub.
+  - Not done: publishing on VPM (it needs the owner's account and approval), the 24 h run,
+    benchmarks against Seyfert and automatic resharding. The last one was left out: restarting the
+    shards with a new total on the fly requires restructuring `run`, and the manual range
+    (`ShardRange`) covers today's large bots.
+- Public `veyfert.testing`.
+- Optional: `zstd-stream`, automatic resharding, and saving the session when stopping to resume it on
+  start, warning that the cache starts empty.
+- Documentation (`v doc` and a guide with the same structure as Seyfert's), examples and benchmarks
+  against Seyfert (RAM per guild and events per second).
+- CI on Linux, macOS and Windows, publishing on VPM and a deprecation policy with `@[deprecated]` and
   `@[deprecated_after]`.
 
-## 7. Riesgos y huecos de V encontrados
+## 7. Risks and V gaps found
 
-| # | Hallazgo | Evidencia | Mitigación en veyfert | Posible PR a V |
+| # | Finding | Evidence | Mitigation in veyfert | Possible PR to V |
 |---|---|---|---|---|
-| 1 | `json2` solo discrimina sum types con `"_type"`, sin opción para cambiarlo | Al codificar añade `"_type":"Button"`. Al decodificar JSON de Discord: `could not resolve sumtype ... missing "_type" field?` | Modelos planos. Si una variante tiene su propio `to_json`, `json2` lo usa y no escribe `_type`. Para decodificar, `from_json(Any)` + `decode_any[T]` | Un atributo para elegir la clave y el valor del discriminante |
-| 2 | Un campo `?SumType` (`Null \| string`) no compila | `unknown function val.to_json` | `?Nullable[T]` | Hoy compila, pero `json2.Null` dentro de un sum type sale como `{"_type":"Null"}` en vez de `null`: [vlang/v#32880](https://github.com/vlang/v/issues/32880) |
-| 3 | Un esquema de atributo exige todos sus campos y no admite valores por defecto ni repetirse en la misma declaración | `attribute X is missing field`, `cannot have a default value`, `duplicate attribute` | Esquemas pequeños y listas separadas por comas (`@[Use('a,b')]`) | Campos opcionales con valor por defecto |
-| 4 | Los valores de un esquema no se pueden usar en un `$if` | La doc de atributos dice que "requires further work" | Validar longitudes y nombres al registrar, no al compilar | Exponer esos valores al comptime |
-| 5 | `-race` no existe en Windows | Doc de V | CI en Linux, o WSL en local | — |
-| 6 | El logger de `net.websocket` escribe INFO, y cada mensaje tiene un tope de 8 MiB | Salida de la sonda; README del módulo | Logger propio y el tope como opción | — |
-| 7 | `post_multipart_form` solo hace POST | Código de `net.http` | Multipart propio sobre `fetch` | Aceptar el método como parámetro |
-| 8 | La spec OpenAPI de Discord está en "public preview" y no cubre el gateway | README de discord-api-spec | Commit fijado, overrides y gateway a mano | — |
-| 9 | Los módulos `x.` son experimentales | Convención de vlib | Una API interna fina por encima | — |
-| 10 | El tiempo de compilación crece con cada comando, porque cada tipo instancia los genéricos | El REST generado añade 1,3 s a cada build (5,5 s frente a 4,2 s del ejemplo) aunque el bot no use sus endpoints; el binario apenas cambia | Medido en la fase 3: 100 comandos compilan en 12,2 s frente a 5,7 s con uno (unos 65 ms por comando). En la fase 7 el REST generado pasó a `veyfert.rest.api`: `examples/basic` compila en 8,7-9,2 s frente a 10,4-11,5 s con él dentro del núcleo | — |
-| 11 | El rendimiento de `json2` en payloads grandes del gateway | Sin medir | Benchmark en la fase 1; si falla, usar el scanner de tokens de `json2` en los eventos calientes | — |
-| 12 | `v fmt -w` aplana los atributos de campo con varios argumentos: `@[Range(min: 1, max: 10)]` pasa a `@[Range; Range_min: 1; Range_max: 10]`. Compila con avisos, pero con `-prod` o `-W` falla | `unknown attribute Range_min ... Unvalidated attributes are deprecated` en la fase 0 | En los campos, solo esquemas de un valor (`Min`, `Max`, `Desc`, `Label`); `v fmt` los deja en la forma equivalente `@[Min: 1]`. Los atributos de struct con varios argumentos no se tocan | [vlang/v#32875](https://github.com/vlang/v/issues/32875) |
-| 13 | `net.websocket` llama a `on_close` dos veces cuando el servidor cierra (con su código y luego con 1000), y reporta una conexión rota como 1000 tras un error de lectura | Código de `websocket_client.v` (líneas 178-183 y 235-237); en la fase 1 todo cierre del servidor acababa en "sesión nueva" | El shard se queda con el primer reporte de cada conexión y trata como 1006 un cierre precedido de `on_error` | [vlang/v#32878](https://github.com/vlang/v/issues/32878) |
-| 14 | Un `select` dentro de una librería no enlaza con `-skip-unused`, la opción por defecto: el C llama a `sync__channel_select_lang` sin declararla | El ejemplo de la fase 1 solo compilaba con `-no-skip-unused`; los tests sí porque su propio código usa `select` | `recv_until` sondea con `try_pop` cada 10 ms; volver a `select` cuando V lo arregle | No se reprodujo aislado en V 0.5.2 `0a43261` (un `select` en un módulo, genérico o no, compila); sin issue mientras no haya caso mínimo |
-| 15 | Una llamada genérica dentro de `$if a is Schema` (o `$if a.name == '...'`) se instancia para el tipo de todos los campos del struct, no solo de los que llevan el atributo. `$compile_error` sí respeta la rama | Sonda de la fase 3: `guard_fn(proto.$(field.name))` bajo `$if a is Use` pidió `int.check` y `string.check` | Filtrar por tipo, que sí acota la instancia: los guards se detectan con `$if field.typ is Guard`, y la recursión de `@[Sub]` va dentro de `$if field.typ is $struct` | [vlang/v#32876](https://github.com/vlang/v/issues/32876); además `v -check` no ve un `$compile_error` en esas ramas: [vlang/v#32877](https://github.com/vlang/v/issues/32877) |
-| 16 | Con `-skip-unused` (la opción por defecto), una instancia de un método genérico a la que solo llama la propia librería no se genera: el C llama a `veyfert__Client_Interaction__wait_for` sin definirla. Desde el código del bot, la misma llamada funciona, y los tests no lo detectan | Build de `examples/components` en la fase 4; `@[markused]` no lo arregla, y `-no-skip-unused` choca con otro bug de vlib (`http.DebugHandler`) | La librería no llama a sus genéricos de eventos: `wait_interaction` es una espera concreta. Cada ejemplo se compila con `-W` como test de humo | No se reprodujo aislado (un caso con la misma estructura compila). Se parece a [vlang/v#27205](https://github.com/vlang/v/issues/27205), cerrado. En el C, la expresión toma el nombre o el tipo de otro nodo, igual que en el riesgo 17; sin issue mientras no haya caso mínimo |
-| 17 | `net.http.Server` no compila con veyfert en el build: en el C de `http.DebugHandler`, `time.now()` sale como `i64` (`cannot convert struct time__Time to long long`). Un programa mínimo con `http.Server` sí compila, y el `time.now()` de vlib cae en el mismo byte que un `$if field.typ is ?i64` de `commands.v`, lo que apunta a un tipo cacheado por posición | Test de `veyfert.server` (fase 6) y `-no-skip-unused` (fase 4); C generado de los dos builds | Servidor HTTP/1.1 mínimo sobre `net` (un hilo por petición, sin keep-alive), suficiente para los POST de Discord | Sin issue: no se pudo aislar. Alinear a mano las posiciones en dos archivos no lo reprodujo |
-| 18 | El servidor de `net.websocket` siempre escucha en todas las interfaces (`:port`), sin opción de dirección. En Windows, cada ejecutable de test nuevo que abre un puerto así dispara el aviso del firewall, y el usuario lo vio "a cada rato" | `websocket_server.v`, línea 80 | `veyfert.testing.ws`: un servidor de websocket mínimo en 127.0.0.1 para los gateways falsos, y `veyfert.server` con opción `host` | Aceptar la dirección en `new_server` |
-| 19 | `json2` decodifica un campo `@[raw]` como el texto JSON, pero al codificar lo escribe entre comillas: decodificar y volver a codificar cambia el documento | Sonda de la fase 2 | `RawJson`, con `from_json(Any)` y `to_json()` propios | [vlang/v#32879](https://github.com/vlang/v/issues/32879) |
-| 20 | El `zero()` que V genera para un enum `@[flag]` no se encuentra con prefijo de módulo: `discord.Permissions.zero()` da `unknown function: Permissions.zero`. Los métodos estáticos propios (`discord.Permissions.parse`) sí funcionan | Reorganización en capas (fase 7) | `discord.no_permissions()` | Pendiente de reportar |
+| 1 | `json2` only discriminates sum types with `"_type"`, with no option to change it | When encoding it adds `"_type":"Button"`. When decoding Discord's JSON: `could not resolve sumtype ... missing "_type" field?` | Flat models. If a variant has its own `to_json`, `json2` uses it and writes no `_type`. For decoding, `from_json(Any)` + `decode_any[T]` | An attribute to choose the discriminator's key and value |
+| 2 | A `?SumType` field (`Null \| string`) did not compile | `unknown function val.to_json` | `?Nullable[T]` | It compiles today, but `json2.Null` inside a sum type comes out as `{"_type":"Null"}` instead of `null`: [vlang/v#32880](https://github.com/vlang/v/issues/32880) |
+| 3 | An attribute schema requires all its fields, accepts no default values and cannot repeat on one declaration | `attribute X is missing field`, `cannot have a default value`, `duplicate attribute` | Small schemas and comma-separated lists (`@[Guilds('a,b')]`) | Optional fields with a default value |
+| 4 | A schema's values cannot be used in a `$if` | The attribute docs say it "requires further work" | Validate lengths and names at registration, not at compile time | Expose those values to comptime |
+| 5 | `-race` does not exist on Windows | V's docs | CI on Linux and macOS, or WSL locally | — |
+| 6 | `net.websocket`'s logger writes INFO, and each message has an 8 MiB cap | The probe's output; the module's README | Our own logger and the cap as an option | — |
+| 7 | `post_multipart_form` only does POST | `net.http`'s code | Our own multipart over `fetch` | Take the method as a parameter |
+| 8 | Discord's OpenAPI spec is in "public preview" and does not cover the gateway | discord-api-spec's README | A pinned commit, overrides and a hand-written gateway | — |
+| 9 | `x.` modules are experimental | vlib's convention | A thin internal API on top | — |
+| 10 | Compile time grows with each command, because each type instantiates the generics | The generated REST added 1.3 s to each build (5.5 s against 4.2 s for the example) even when the bot did not use its endpoints; the binary barely changed | Measured in phase 3: 100 commands compile in 12.2 s against 5.7 s with one (about 65 ms per command). In phase 7 the generated REST moved to `veyfert.rest.api`: `examples/basic` compiles in 8.7-9.2 s against 10.4-11.5 s with it inside the core | — |
+| 11 | `json2`'s performance on large gateway payloads | Not measured at first | A benchmark in phase 1 (about 70 MiB/s); if it falls short, use `json2`'s token scanner on hot events | — |
+| 12 | `v fmt -w` flattens field attributes with several arguments: `@[Range(min: 1, max: 10)]` becomes `@[Range; Range_min: 1; Range_max: 10]`. It compiles with warnings, but fails with `-prod` or `-W` | `unknown attribute Range_min ... Unvalidated attributes are deprecated` in phase 0 | On fields, only single-value schemas (`Min`, `Max`, `Desc`, `Label`); `v fmt` keeps them in the equivalent form `@[Min: 1]`. Struct attributes with several arguments are left alone | [vlang/v#32875](https://github.com/vlang/v/issues/32875) |
+| 13 | `net.websocket` calls `on_close` twice when the server closes (with its code, then with 1000), and reports a broken connection as 1000 after a read error | `websocket_client.v`'s code (`manage_clean_close` and the `defer` in `listen`); in phase 1 every server close ended in "new session" | The shard keeps the first report of each connection and treats a close preceded by `on_error` as 1006 | [vlang/v#32878](https://github.com/vlang/v/issues/32878) |
+| 14 | A `select` inside a library did not link with `-skip-unused`, the default: the C called `sync__channel_select_lang` without declaring it | The phase 1 example only compiled with `-no-skip-unused`; the tests did compile, because their own code uses `select` | `recv_until` polls with `try_pop` every 10 ms; go back to `select` once V fixes it | Not reproduced in isolation on V 0.5.2 `0a43261` (a `select` in a module, generic or not, compiles); no issue until there is a minimal case |
+| 15 | A generic call inside `$if a is Schema` (or `$if a.name == '...'`) is instantiated for the type of every field of the struct, not only those with the attribute. `$compile_error` does respect the branch | A phase 3 probe: `guard_fn(proto.$(field.name))` under `$if a is Use` asked for `int.check` and `string.check` | Filter by type, which does limit the instances: guards are found with `$if field.typ is Guard`, and the `@[Sub]` recursion sits inside `$if field.typ is $struct` | [vlang/v#32876](https://github.com/vlang/v/issues/32876); also, `v -check` does not see a `$compile_error` in those branches: [vlang/v#32877](https://github.com/vlang/v/issues/32877) |
+| 16 | With `-skip-unused` (the default), an instance of a generic method that only the library itself calls is not generated: the C calls `veyfert__Client_Interaction__wait_for` without defining it. From the bot's code the same call works, and the tests do not catch it | The `examples/components` build in phase 4; `@[markused]` does not fix it, and `-no-skip-unused` runs into another vlib bug (`http.DebugHandler`) | The library does not call its own event generics: `wait_interaction` is a concrete wait. Each example is built with `-W` as a smoke test | Not reproduced in isolation (a case with the same structure compiles). It resembles [vlang/v#27205](https://github.com/vlang/v/issues/27205), closed. In the C, the expression takes another node's name or type, as in risk 17; no issue until there is a minimal case |
+| 17 | `net.http.Server` does not compile together with veyfert: in the C of `http.DebugHandler`, `time.now()` comes out as an `i64` (`cannot convert struct time__Time to long long`). A minimal program with `http.Server` does compile, and vlib's `time.now()` sits at the same byte offset as a `$if field.typ is ?i64` in `commands.v`, which points to a type cached by position | The `veyfert.server` test (phase 6) and `-no-skip-unused` (phase 4); the generated C of both builds | A minimal HTTP/1.1 server over `net` (one thread per request, no keep-alive), enough for Discord's POSTs | No issue: it could not be isolated. Aligning the positions by hand in two files did not reproduce it |
+| 18 | `net.websocket`'s server always listens on every interface (`:port`), with no address option. On Windows, each new test executable that opens such a port triggers the firewall prompt, which the user kept seeing | `websocket_server.v`, `listen()` | `veyfert.testing.ws`: a minimal WebSocket server on 127.0.0.1 for the fake gateways, and `veyfert.server` with a `host` option | Accept the address in `new_server` |
+| 19 | `json2` decodes a `@[raw]` field as the JSON text, but writes it back as a quoted string: decoding and encoding again changes the document | A phase 2 probe | `RawJson`, with its own `from_json(Any)` and `to_json()` | [vlang/v#32879](https://github.com/vlang/v/issues/32879) |
+| 20 | The `zero()` that V generates for a `@[flag]` enum is not found through a module prefix: `discord.Permissions.zero()` gives `unknown function: Permissions.zero`. User-defined static methods (`discord.Permissions.parse`) do work | The split by layer (phase 7) | `discord.no_permissions()` | [vlang/v#32882](https://github.com/vlang/v/issues/32882) |
 
-## 8. Decisiones tomadas por defecto
+## 8. Decisions taken by default
 
-- Nombre y módulo `veyfert`, como la carpeta, con licencia MIT como Seyfert.
-- La API, sus identificadores y su documentación en inglés; este plan en español.
-- Varios hilos por defecto, con `workers: 1` como opción.
-- Sin `WorkerManager`: para usar varios procesos, rangos de shards.
-- Sin adaptadores de caché externos ni sistema de plugins completo hasta que haya un caso real que los
-  pida.
-- Voz: solo el gateway (unirse y salir); el audio queda fuera.
-- Sin plazos: cada fase termina cuando pasa su criterio de salida.
+- The name `veyfert`, like the folder, with the MIT license like Seyfert.
+- Everything in the repository is in English: the API, its identifiers, its documentation and this
+  plan.
+- Several threads by default, with `workers: 1` as an option.
+- No `WorkerManager`: to use several processes, shard ranges.
+- No external cache adapters and no full plugin system until a real case asks for them.
+- Voice: only the gateway side (joining and leaving); audio is out of scope.
+- No deadlines: each phase ends when it passes its exit criterion.
 
-## 9. Contexto: otras librerías de Discord en V
+## 9. Context: other Discord libraries in V
 
-| Repositorio | Estado (API de GitHub, 23-11-2026) |
+| Repository | Status (GitHub API, 2026-11-23) |
 |---|---|
-| [DarpHome/discord.v](https://github.com/DarpHome/discord.v) | Activa: último push el 15-06-2026, 42★. "Discord API implementation library" |
-| [Terisback/discord.v](https://github.com/Terisback/discord.v) | Archivada, 115★. Es la única que se presenta como framework |
-| [CesiumLabs/vcord](https://github.com/CesiumLabs/vcord) | Archivada, WIP |
-| [vlang/viscord](https://github.com/vlang/viscord) | Sin cambios desde 2020 |
+| [DarpHome/discord.v](https://github.com/DarpHome/discord.v) | Active: last push on 2026-06-15, 42★. "Discord API implementation library" |
+| [Terisback/discord.v](https://github.com/Terisback/discord.v) | Archived, 115★. The only one that presents itself as a framework |
+| [CesiumLabs/vcord](https://github.com/CesiumLabs/vcord) | Archived, WIP |
+| [vlang/viscord](https://github.com/vlang/viscord) | No changes since 2020 |
 
-No revisé su código. Conviene leer DarpHome/discord.v antes de la fase 0 para comparar cómo resuelve
-gateway y REST.
+Their code was not reviewed. Reading DarpHome/discord.v would help to compare how it handles the
+gateway and REST.
 
-## 10. Fuentes
+## 10. Sources
 
-- Seyfert: <https://github.com/tiramisulabs/seyfert> (commit `ac6e8e9`, incluidos sus `AGENTS.md` por
-  subsistema).
-- Spec OpenAPI de Discord: <https://github.com/discord/discord-api-spec> (`specs/openapi.json`, último
-  push el 06-11-2026).
-- Documentación de V instalada: `C:\v\doc\docs.md`, `C:\v\doc\custom_attributes.md`,
-  `C:\v\doc\custom_attribute_arguments.md`, `C:\v\vlib\json2\README.md`,
-  `C:\v\vlib\net\websocket\README.md`, y los README de `goroutines`, `cache`, `ratelimit`, `i18n`,
-  `x\async`, `x\executor` y `compress\*`.
-- Búsqueda de librerías existentes: <https://vpm.vlang.io/packages/Terisback.discordv>,
+- Seyfert: <https://github.com/tiramisulabs/seyfert> (commit `ac6e8e9`, its per-subsystem `AGENTS.md`
+  files included).
+- Discord's OpenAPI spec: <https://github.com/discord/discord-api-spec> (`specs/openapi.json`, last
+  push on 2026-11-06).
+- V's documentation, in its repository: `doc/docs.md`, `doc/custom_attributes.md`,
+  `doc/custom_attribute_arguments.md`, `vlib/json2/README.md`, `vlib/net/websocket/README.md`, and the
+  READMEs of `goroutines`, `cache`, `ratelimit`, `i18n`, `x/async`, `x/executor` and `compress/*`.
+- The search for existing libraries: <https://vpm.vlang.io/packages/Terisback.discordv>,
   <https://awesome.ecosyste.ms/projects/github.com%2Fvlang%2Fviscord>,
   <https://www.github.com/CesiumLabs/vcord>.

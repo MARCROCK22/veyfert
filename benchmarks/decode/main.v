@@ -35,7 +35,7 @@ fn guild_create_payload(members int, channels int, roles int) string {
 	return '{"op":0,"s":2,"t":"GUILD_CREATE","d":{"id":"5","name":"big guild","member_count":${members},"members":[${m.join(',')}],"channels":[${ch.join(',')}],"roles":[${r.join(',')}]}}'
 }
 
-const message_create = '{"op":0,"s":3,"t":"MESSAGE_CREATE","d":{"id":"10","channel_id":"11","guild_id":"5","author":{"id":"12","username":"someone","bot":false},"content":"hola desde V","timestamp":"2026-11-24T00:00:00.000000+00:00","embeds":[],"attachments":[],"mentions":[],"mention_roles":[],"pinned":false,"tts":false,"type":0}}'
+const message_create = '{"op":0,"s":3,"t":"MESSAGE_CREATE","d":{"id":"10","channel_id":"11","guild_id":"5","author":{"id":"12","username":"someone","bot":false},"content":"hello from V","timestamp":"2026-11-24T00:00:00.000000+00:00","embeds":[],"attachments":[],"mentions":[],"mention_roles":[],"pinned":false,"tts":false,"type":0}}'
 
 fn bench[T](label string, payload string, rounds int) ! {
 	sw := time.new_stopwatch()

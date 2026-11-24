@@ -153,7 +153,7 @@ fn test_files_go_as_multipart_with_the_audit_reason() {
 	mut rc, mock := mock_rest([Scripted{}])
 	rc.request(.post, '/channels/1/messages',
 		body:   '{"content":"hi"}'
-		reason: 'hola mundo/1'
+		reason: 'hello world/1'
 		files:  [discord.File{
 			name: 'a.txt'
 			data: 'abc'.bytes()
@@ -161,7 +161,7 @@ fn test_files_go_as_multipart_with_the_audit_reason() {
 	) or { panic(err) }
 	req := mock.requests[0]
 	assert req.headers['Content-Type'].starts_with('multipart/form-data; boundary=')
-	assert req.headers['X-Audit-Log-Reason'] == 'hola%20mundo%2F1'
+	assert req.headers['X-Audit-Log-Reason'] == 'hello%20world%2F1'
 	assert req.body.contains('name="payload_json"\r\nContent-Type: application/json\r\n\r\n{"content":"hi"}')
 	assert req.body.contains('name="files[0]"; filename="a.txt"\r\nContent-Type: application/octet-stream\r\n\r\nabc\r\n')
 }
