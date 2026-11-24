@@ -3,12 +3,13 @@
 # Locally (Linux or macOS): TSAN_OPTIONS="suppressions=$PWD/tests/tsan.supp" v -race test .
 
 # net.websocket masks every frame it sends with rand.bytes(), V's global generator, which is
-# not thread safe: two threads that send frames race on it.
+# not thread safe: two threads that send frames race on it. vlang/v#32886
 race:websocket__create_masking_key
 
 # net.TcpConn.read_ptr takes the connection by value, so each read copies the struct while a
-# write on another thread updates it (last_write_sent).
+# write on another thread updates it (last_write_sent). vlang/v#32888
 race:websocket__Client__socket_read_unbuffered
 
 # Client.close() closes the socket while the client's listen() may be inside recv() on it.
+# vlang/v#32887
 race:websocket__Client__shutdown_socket

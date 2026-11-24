@@ -419,8 +419,9 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
 **Phase 0 — Vertical spike.** Proves the whole path before investing in breadth.
 - **Status (2026-11-23): done on Windows.** The `examples/basic` bot uploaded `/ping` and `/search` to
   a test server, identified on the gateway, kept the heartbeat and answered both commands from
-  Discord. `v test .` passes. Linux is left for CI. The test uncovered two things: `log`'s logger
-  does not flush its buffer per line unless asked (`set_always_flush(true)`), and risk 12.
+  Discord. `v test .` passes, on Linux and macOS too in CI since phase 7. The test uncovered two
+  things: `log`'s logger does not flush its buffer per line unless asked (`set_always_flush(true)`),
+  and risk 12.
 - `v.mod`, `.gitignore` (with `.env` and `.veyfert/`) and minimal CI.
 - `Snowflake`, `Nullable[T]`, `Intents` and `Permissions`; the session's probes become `_test.v`.
 - One shard: HELLO → IDENTIFY → heartbeat → READY, with the envelope and `d @[raw]`.
@@ -442,7 +443,7 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
 - Benchmark (`benchmarks/decode`, `-prod`): a READY of 2500 guilds in 1.7 ms; a GUILD_CREATE of 1000
   members (281 KiB) in 3.6 ms; a MESSAGE_CREATE in 4 µs. That is about 70 MiB/s with `json2`.
 - The member and presence duplicate filters were done in phase 5, and `max_message_bytes` is a client
-  option since phase 7. Linux and `-race` are left for CI.
+  option since phase 7. On Linux and macOS, the tests and `-race` pass in CI since phase 7.
 - Resume and reconnection with `shard.ts`'s close code table, zombie detection, a connection timeout
   and an offline send queue.
 - Several shards in one process, with an identify queue by `max_concurrency`, shard ranges (`start`,
@@ -528,7 +529,7 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
   `wait_for_modal`, `update` and `defer_update`.
 
 **Phase 5 — Cache, structures and shorters.**
-- **Status (2026-11-24): done on Windows, except `-race` (Linux and macOS only).** `cache.v` keeps
+- **Status (2026-11-24): done; `-race` is clean in CI on Linux and macOS since phase 7.** `cache.v` keeps
   guilds, channels and threads (with their overwrites), roles, users, members, emojis, stickers,
   presences, voice states, stage instances, bans and the last N messages per channel. There is one
   map per resource, each of which can be turned off, behind an `RwMutex`, and it is updated on the
@@ -600,7 +601,8 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
     - (6) each shorter keeps what REST returns in the cache, and forgets what it deletes; a sent
       message is not duplicated when its `MESSAGE_CREATE` arrives.
     - (8) `intercept_send` changes or drops any payload a shard sends.
-  - The repository and its CI are on GitHub.
+  - The repository is public on GitHub, and CI passes on Linux, macOS and Windows, `-race` included
+    (risk 21 says what it suppresses).
   - Not done: publishing on VPM (it needs the owner's account and approval), the 24 h run,
     benchmarks against Seyfert and automatic resharding. The last one was left out: restarting the
     shards with a new total on the fly requires restructuring `run`, and the manual range
@@ -637,7 +639,8 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
 | 18 | `net.websocket`'s server always listens on every interface (`:port`), with no address option. On Windows, each new test executable that opens such a port triggers the firewall prompt, which the user kept seeing | `websocket_server.v`, `listen()` | `veyfert.testing.ws`: a minimal WebSocket server on 127.0.0.1 for the fake gateways, and `veyfert.server` with a `host` option | Accept the address in `new_server` |
 | 19 | `json2` decodes a `@[raw]` field as the JSON text, but writes it back as a quoted string: decoding and encoding again changes the document | A phase 2 probe | `RawJson`, with its own `from_json(Any)` and `to_json()` | [vlang/v#32879](https://github.com/vlang/v/issues/32879) |
 | 20 | The `zero()` that V generates for a `@[flag]` enum is not found through a module prefix: `discord.Permissions.zero()` gives `unknown function: Permissions.zero`. User-defined static methods (`discord.Permissions.parse`) do work | The split by layer (phase 7) | `discord.no_permissions()` | [vlang/v#32882](https://github.com/vlang/v/issues/32882) |
-| 21 | `net.websocket` has data races that `-race` reports: it masks every frame with `rand.bytes()`, the global generator, which `rand`'s README says is not thread safe; `net.TcpConn.read` and `read_ptr` take the connection by value, so each read copies the struct while a write on another thread updates it; and `Client.close()` closes the socket while `listen()` may be in `recv()` on it | The first `-race` run in CI (phase 7) | veyfert uses `crypto.rand`, never the global generator. Its test WebSocket server reads through its own copy of the connection and shuts the socket down instead of closing it from another thread. CI suppresses only those three races inside `net.websocket` (`tests/tsan.supp`) | To report |
+| 21 | `net.websocket` has data races that `-race` reports: it masks every frame with `rand.bytes()`, the global generator, which `rand`'s README says is not thread safe; `net.TcpConn.read` and `read_ptr` take the connection by value, so each read copies the struct while a write on another thread updates it; and `Client.close()` closes the socket while `listen()` may be in `recv()` on it | The first `-race` run in CI (phase 7) | veyfert uses `crypto.rand`, never the global generator. Its test WebSocket server reads through its own copy of the connection and shuts the socket down instead of closing it from another thread. CI suppresses only those three races inside `net.websocket` (`tests/tsan.supp`) | [vlang/v#32886](https://github.com/vlang/v/issues/32886), [vlang/v#32888](https://github.com/vlang/v/issues/32888), [vlang/v#32887](https://github.com/vlang/v/issues/32887) |
+| 22 | Over `wss://`, `net.websocket` reads the TLS connection in `listen()` while other threads write to it; [vlang/v#31772](https://github.com/vlang/v/issues/31772) explains that neither Mbed TLS nor OpenSSL supports concurrent calls on one connection | vlib's code and that issue (phase 7); `-race` does not see it, because the tests use `ws://` | None yet: the shard reads on its own thread and writes heartbeats and payloads from others. Doing it safely needs non-blocking TLS with a lock, which belongs in `net.ssl` | [vlang/v#31772](https://github.com/vlang/v/issues/31772) (open) |
 
 ## 8. Decisions taken by default
 

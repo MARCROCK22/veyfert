@@ -353,7 +353,7 @@ assert reply.body.contains('pong')
 
 ## Known V issues
 
-veyfert works around these V issues; [docs/PLAN.md](docs/PLAN.md) (risks 12-21) has the
+veyfert works around these V issues; [docs/PLAN.md](docs/PLAN.md) (risks 12-22) has the
 details:
 
 - `v fmt` flattens field attributes that take several arguments
@@ -373,11 +373,16 @@ details:
 - A flag enum's built-in `zero()` is not found through a module prefix
   ([vlang/v#32882](https://github.com/vlang/v/issues/32882)), so `discord.no_permissions()` exists.
 - `net.websocket` has data races that `-race` reports: it masks frames with V's global `rand`
-  generator, which is not thread safe; `TcpConn.read` copies the connection while another thread
-  writes to it; and `Client.close()` closes the socket while `listen()` reads from it. veyfert does
-  not use the global generator, and `tests/tsan.supp` suppresses only those three, also for your
-  bot's tests: `TSAN_OPTIONS="suppressions=$PWD/tests/tsan.supp" v -race test .`
+  generator, which is not thread safe ([vlang/v#32886](https://github.com/vlang/v/issues/32886));
+  `TcpConn.read` copies the connection while another thread writes to it
+  ([vlang/v#32888](https://github.com/vlang/v/issues/32888)); and `Client.close()` closes the
+  socket while `listen()` reads from it ([vlang/v#32887](https://github.com/vlang/v/issues/32887)).
+  veyfert does not use the global generator. `tests/tsan.supp` suppresses only those three; use it
+  with `-race`, for veyfert or for your bot: `TSAN_OPTIONS="suppressions=<veyfert>/tests/tsan.supp"`.
 - `net.websocket`'s server binds every interface, so `veyfert.testing` has its own on 127.0.0.1.
+- Over `wss://`, `net.websocket` reads the TLS connection on one thread while others write to it,
+  which neither TLS backend supports, as [vlang/v#31772](https://github.com/vlang/v/issues/31772)
+  explains. The gateway sends heartbeats and payloads that way; veyfert has no workaround yet.
 
 ## Deprecation policy
 
