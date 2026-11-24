@@ -1,7 +1,6 @@
 module veyfert
 
 import sync
-import time
 import veyfert.discord
 import veyfert.rest
 

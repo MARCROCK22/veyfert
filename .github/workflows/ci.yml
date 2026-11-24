@@ -31,7 +31,7 @@ jobs:
       - name: zstd-stream tests
         run: v -d veyfert_zstd -path "$VPATH" test veyfert/gateway_test.v
       - name: Compile-fail tests
-        run: v run veyfert/tests/compile_fail.vsh
+        run: v run veyfert/tests/run_compile_fail.vsh
       - name: Examples build with warnings as errors
         run: |
           v -W -path "$VPATH" -o basic veyfert/examples/basic

@@ -1,7 +1,7 @@
 #!/usr/bin/env -S v
 
 // Compiles each case in tests/compile_fail and checks that it fails with the message its
-// `// expect:` line names. Run it from anywhere: v run tests/compile_fail.vsh
+// `// expect:` line names. Run it from anywhere: v run tests/run_compile_fail.vsh
 import os
 
 root := os.dir(os.dir(@FILE))

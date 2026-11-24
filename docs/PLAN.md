@@ -394,7 +394,7 @@ veyfert/
 ├── testing/                 # module veyfert.testing: fake gateway and REST, payloads
 │   └── ws/                  #   WebSocket server on 127.0.0.1
 ├── examples/{basic,components}/
-├── tests/compile_fail/      # cases that must fail with an exact message (compile_fail.vsh)
+├── tests/compile_fail/      # cases that must fail with an exact message (run_compile_fail.vsh)
 ├── tools/gen_api.vsh        # generator from discord-api-spec (pinned commit)
 ├── benchmarks/decode/
 ├── docs/PLAN.md
@@ -482,7 +482,7 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
   client. Also `Perms`, `BotPerms`, `Nsfw`, `Guilds`, `Contexts` and `Integrations`, and uploads per
   scope (global and per server).
 - 15 dispatch tests with sample interactions and 3 compile-fail tests
-  (`v run tests/compile_fail.vsh`). Against real Discord, the server accepted the example's 8
+  (`v run tests/run_compile_fail.vsh`). Against real Discord, the server accepted the example's 8
   commands: the `/config` tree, both menus, autocomplete, channel types and lengths.
 - Compile time: a bot with 100 commands (each with a cooldown, an enum, a `User` and two more options)
   compiles in 12.2 s, against 5.7 s with one; that is about 65 ms per command, and the binary goes
