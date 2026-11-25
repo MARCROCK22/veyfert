@@ -24,3 +24,4 @@ warnings as errors.
 | [reminders](reminders/main.v) | `/remind when:1h30m what:...`, then lists and cancels them; delivered by DM when the channel is closed | Autocomplete, `check_options`, subcommands, the Scheduler plugin, a JSON file written safely | — |
 | [tags](tags/main.v) | Saved answers per server: create and edit them in a form, post them with `/tag show` or `@bot t name` | A modal for creating and editing (`CustomIdRegex`), shared autocomplete, a prefix-only command, no pings | — |
 | [starboard](starboard/main.v) | Reposts messages that get enough ⭐ and keeps the count up to date | Reaction events, the REST shorters, Discord as storage (finding its posts after a restart) | — |
+| [giveaway](giveaway/main.v) | Giveaways with an Enter button; draws the winners when they end, and ends or rerolls them from the message | Message context menus, an update plus an ephemeral followup, the Scheduler plugin, a JSON file | — |
