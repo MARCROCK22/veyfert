@@ -17,3 +17,4 @@ warnings as errors.
 | [components](components/main.v) | Buttons, a select menu, a confirmation, a modal, a poll, a card | Components v1 and v2, modals, waiting for a click | — |
 | [moderation](moderation/main.v) | Ban, unban, kick, timeout, purge and warnings | Permissions, the role hierarchy, DMs, `check_options`, one error hook for every command, prefix commands | — |
 | [welcome](welcome/main.v) | Greets new members with a card and a role, and says goodbye | Gateway events as plain functions, the cache, allowed mentions, settings from the environment | Server Members |
+| [tickets](tickets/main.v) | A panel button opens a form, the form opens a private thread with the staff, closing it logs a transcript | Buttons, a modal with dependencies, a handler guard, data in the custom ID, threads, files | — |
