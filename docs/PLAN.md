@@ -389,6 +389,7 @@ veyfert/
 ├── rest/                    # module veyfert.rest: Transport, rate limits, multipart, errors
 │   └── api/                 # module veyfert.rest.api: GENERATED, one function per endpoint
 ├── cache/                   # module veyfert.cache: the in-memory cache
+├── formatter/               # module veyfert.formatter: markdown, mentions, timestamps, links
 ├── plugins/                 # module veyfert.plugins: official plugins (Scheduler)
 ├── server/                  # module veyfert.server: interactions over HTTP
 ├── testing/                 # module veyfert.testing: fake gateway and REST, payloads
@@ -700,12 +701,17 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
       block, like `wait_for`; `each` returns `stop()` to end them, and collected clicks skip
       the handlers.
     - [x] Attachments from base64: `discord.file_from_base64`, plain or as a data URI.
-  - Utilities:
-    - [ ] A formatter: markdown, mentions (users, channels, roles, slash commands), timestamps and
-      their styles, headings, links, code blocks, lists and OAuth2 URLs.
-    - [ ] CDN URLs for every image Discord serves, with the allowed formats and sizes.
-    - [ ] Helpers on the models: mentions, URLs, display names, creation time, embed colors, color
-      parsing and emoji encoding.
+  - Utilities (done, tested in `formatter/formatter_test.v` and `discord/helpers_test.v`):
+    - [x] A formatter, the `veyfert.formatter` module: markdown, mentions (users, channels, roles,
+      slash commands, emojis), timestamps and their nine styles, headings, links, code blocks,
+      lists, guild navigation and OAuth2 URLs.
+    - [x] CDN URLs for every image Discord serves, with the allowed formats and sizes: methods on
+      User, Member, Guild, Role, Emoji, GuildEmoji, Sticker, ScheduledEvent, Application and
+      SoundboardSound, and functions for the rest. A size or format the CDN lacks is left out of
+      the URL; `ImageOptions.check()` reports it.
+    - [x] Helpers on the models: `mention()`, `url()`, `display_name()`, `tag()`,
+      `Snowflake.created_at()`, `discord.colors` (Seyfert's embed colors), `parse_color` and
+      `rgb`, and `parse_emoji` with `Emoji.reaction()` for the reaction shorters.
   - Cache:
     - [ ] An adapter interface, the in-memory adapter, a limited one (a limit and an expiry per
       resource) and a conformance suite for adapters.

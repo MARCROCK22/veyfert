@@ -12,18 +12,26 @@ pub:
 // Payloads used by phase 0. Field names mirror Discord's JSON, which is snake_case like V;
 // unknown fields are ignored. Generated models replace these in phase 2.
 
+// AvatarDecoration is the frame around a user's avatar.
+pub struct AvatarDecoration {
+pub:
+	asset  string
+	sku_id ?Snowflake
+}
+
 pub struct User {
 pub:
-	id            Snowflake
-	username      string
-	discriminator string
-	global_name   ?string
-	avatar        ?string
-	banner        ?string
-	accent_color  ?int
-	bot           bool
-	system        bool
-	public_flags  int
+	id                     Snowflake
+	username               string
+	discriminator          string
+	global_name            ?string
+	avatar                 ?string
+	banner                 ?string
+	accent_color           ?int
+	bot                    bool
+	system                 bool
+	public_flags           int
+	avatar_decoration_data ?AvatarDecoration
 }
 
 pub struct Member {
@@ -39,6 +47,7 @@ pub:
 	pending                      bool
 	flags                        int
 	communication_disabled_until ?string
+	banner                       ?string    // the member's banner in this guild
 	permissions                  ?string    // in interactions: the member's permissions in the channel
 	guild_id                     ?Snowflake // set by member events and by the cache
 }

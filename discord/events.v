@@ -8,6 +8,7 @@ pub:
 	name                       string
 	icon                       ?string
 	splash                     ?string
+	discovery_splash           ?string
 	banner                     ?string
 	description                ?string
 	owner_id                   Snowflake
