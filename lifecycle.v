@@ -11,6 +11,12 @@ pub struct RawGuildCreate {
 	discord.GuildCreate
 }
 
+// RawGuildDelete is a GUILD_DELETE for a guild that READY announced and that had not loaded yet.
+@[discord.Event('RAW_GUILD_DELETE')]
+pub struct RawGuildDelete {
+	discord.GuildDelete
+}
+
 // GuildsReady is emitted when a shard has received every guild announced by its READY.
 @[discord.Event('GUILDS_READY')]
 pub struct GuildsReady {

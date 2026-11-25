@@ -259,6 +259,31 @@ struct MemberBatch {
 	members []discord.Member
 }
 
+struct SoundboardRequest {
+	guild_ids []discord.Snowflake
+}
+
+// request_soundboard_sounds asks the gateway for the soundboard sounds of guilds; each guild's
+// answer arrives as a discord.SoundboardSounds event.
+pub fn (mut c Client) request_soundboard_sounds(guild_ids []discord.Snowflake) ! {
+	mut by_shard := map[int][]discord.Snowflake{}
+	mut shards := map[int]&Shard{}
+	for id in guild_ids {
+		mut s := c.shard_for(id)!
+		mut ids := by_shard[s.id] or { []discord.Snowflake{} }
+		ids << id
+		by_shard[s.id] = ids
+		shards[s.id] = s
+	}
+	for shard_id, ids in by_shard {
+		mut s := shards[shard_id] or { continue }
+		s.send(json2.encode(Payload[SoundboardRequest]{
+			op: 31
+			d:  SoundboardRequest{ids}
+		}))!
+	}
+}
+
 // request_members asks the gateway for guild members and waits for every chunk of the answer.
 // Asking for every member, or by query, needs the privileged GUILD_MEMBERS intent.
 pub fn (mut c Client) request_members(opts RequestMembers) ![]discord.Member {

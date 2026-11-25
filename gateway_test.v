@@ -543,3 +543,15 @@ fn test_send_interceptors_change_or_drop_payloads() {
 	assert fg.count(8) == 0
 	c.stop()
 }
+
+fn test_request_soundboard_sounds_sends_op_31_to_the_shard_of_the_guilds() {
+	mut fg := start_fake_gateway(31916, [])
+	mut c := fake_client(31916)
+	connect(mut fg, mut c)
+	c.request_soundboard_sounds([discord.Snowflake{5}, discord.Snowflake{6}]) or { panic(err) }
+	assert wait_until(fn [mut fg] () bool {
+		return fg.count(31) == 1
+	}, 5 * time.second), 'no op 31 arrived'
+	assert fg.last(31).contains('"d":{"guild_ids":["5","6"]}')
+	c.stop()
+}

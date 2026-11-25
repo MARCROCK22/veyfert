@@ -658,7 +658,8 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
     - [x] `c.users` (1): delete_dm.
     - [x] `c.webhooks` (6): edit, fetch, fetch_message, edit_message, delete_message, list_guild.
   - Events:
-    - [ ] Typed payloads for the 42 gateway events that only reach RAW listeners today:
+    - [x] Typed payloads for the 42 gateway events that only reached RAW listeners, done in
+      `discord/events_more.v` (and `RawGuildDelete` in `lifecycle.v`; RAW itself is `c.on_raw`):
       APPLICATION_COMMAND_PERMISSIONS_UPDATE; AUTO_MODERATION_RULE_CREATE, _UPDATE, _DELETE and
       AUTO_MODERATION_ACTION_EXECUTION; CHANNEL_PINS_UPDATE and CHANNEL_INFO; ENTITLEMENT_CREATE,
       _UPDATE and _DELETE; GUILD_AUDIT_LOG_ENTRY_CREATE; GUILD_INTEGRATIONS_UPDATE;
@@ -668,9 +669,12 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
       MESSAGE_REACTION_REMOVE_ALL and _REMOVE_EMOJI; MESSAGE_POLL_VOTE_ADD and _REMOVE;
       RAW_GUILD_DELETE; SUBSCRIPTION_CREATE, _UPDATE and _DELETE; THREAD_MEMBER_UPDATE and
       THREAD_MEMBERS_UPDATE; VOICE_SERVER_UPDATE, VOICE_CHANNEL_EFFECT_SEND,
-      VOICE_CHANNEL_STATUS_UPDATE and VOICE_CHANNEL_START_TIME_UPDATE; WEBHOOKS_UPDATE. The cache
-      follows the ones that change what it keeps.
-    - [ ] The gateway request for soundboard sounds (op 31).
+      VOICE_CHANNEL_STATUS_UPDATE and VOICE_CHANNEL_START_TIME_UPDATE; WEBHOOKS_UPDATE. As Seyfert's,
+      the cache now also follows INTERACTION_CREATE (the user and the members it mentions),
+      MESSAGE_REACTION_ADD and TYPING_START (the member), VOICE_CHANNEL_STATUS_UPDATE and
+      RAW_GUILD_DELETE. Tested in `events_parity_test.v`.
+    - [x] The gateway request for soundboard sounds (op 31): `c.request_soundboard_sounds(guild_ids)`,
+      answered by SOUNDBOARD_SOUNDS events; tested against the fake gateway.
   - Commands:
     - [ ] Entry point commands (Activities), with their context and the launch response.
     - [ ] The hooks still missing: on_before_guards, on_before_options, on_after_run,

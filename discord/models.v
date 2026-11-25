@@ -284,6 +284,7 @@ pub:
 	thread_metadata       ?ThreadMetadata
 	message_count         ?int
 	member_count          ?int
+	status                ?string // a voice channel's status line
 	permissions           ?string // in interactions: the bot's permissions there
 	flags                 int
 }

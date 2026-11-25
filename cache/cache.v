@@ -22,6 +22,12 @@ pub:
 	messages        int // messages kept per channel; 0 keeps none
 }
 
+// MemberEvent is the part of MESSAGE_REACTION_ADD and TYPING_START that the cache keeps.
+struct MemberEvent {
+	guild_id ?discord.Snowflake
+	member   ?discord.Member
+}
+
 // Cache is an in-memory copy of what the gateway sent. Shard threads write it in event order,
 // before listeners run; any thread can read it.
 // ponytail: one RwMutex for every resource; split it per resource if readers contend.
@@ -207,9 +213,54 @@ pub fn (mut c Cache) apply(name string, raw string) {
 			g := json2.decode[discord.Guild](raw) or { return }
 			c.put_guild(g)
 		}
-		'GUILD_DELETE' {
+		'GUILD_DELETE', 'RAW_GUILD_DELETE' {
 			g := json2.decode[discord.GuildDelete](raw) or { return }
 			c.remove_guild(g.id, g.unavailable)
+		}
+		'INTERACTION_CREATE' {
+			// As in Seyfert: the user who interacted, and the users and members it mentions.
+			i := json2.decode[discord.Interaction](raw) or { return }
+			c.mu.lock()
+			if guild_id := i.guild_id {
+				if m := i.member {
+					c.put_member(guild_id, m)
+				}
+			} else if u := i.user {
+				c.put_user(u)
+			}
+			if data := i.data {
+				if r := data.resolved {
+					for id, u in r.users {
+						if guild_id := i.guild_id {
+							if m := r.members[id] {
+								c.put_member(guild_id, discord.Member{ ...m, user: u })
+								continue
+							}
+						}
+						c.put_user(u)
+					}
+				}
+			}
+			c.mu.unlock()
+		}
+		'MESSAGE_REACTION_ADD', 'TYPING_START' {
+			e := json2.decode[MemberEvent](raw) or { return }
+			guild_id := e.guild_id or { return }
+			m := e.member or { return }
+			c.mu.lock()
+			c.put_member(guild_id, m)
+			c.mu.unlock()
+		}
+		'VOICE_CHANNEL_STATUS_UPDATE' {
+			e := json2.decode[discord.VoiceChannelStatusUpdate](raw) or { return }
+			c.mu.lock()
+			if ch := c.channels[e.id.value] {
+				c.channels[e.id.value] = discord.Channel{
+					...ch
+					status: e.status
+				}
+			}
+			c.mu.unlock()
 		}
 		'CHANNEL_CREATE', 'CHANNEL_UPDATE', 'THREAD_CREATE', 'THREAD_UPDATE' {
 			ch := json2.decode[discord.Channel](raw) or { return }
