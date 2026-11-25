@@ -608,10 +608,9 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
     - (8) `intercept_send` changes or drops any payload a shard sends.
   - The repository is public on GitHub, and CI passes on Linux, macOS and Windows, `-race` included
     (risk 21 says what it suppresses).
-  - Published on VPM as `MARCROCK22.veyfert`, imported as `marcrock22.veyfert`. Not done: the 24 h run,
-    benchmarks against Seyfert and automatic resharding. The last one was left out: restarting the
-    shards with a new total on the fly requires restructuring `run`, and the manual range
-    (`ShardRange`) covers today's large bots.
+  - Published on VPM as `MARCROCK22.veyfert`, imported as `marcrock22.veyfert`. Not done: the 24 h run
+    and benchmarks against Seyfert. Automatic resharding was left out of this phase (it needed
+    `run` restructured) and phase 8 adds it.
 - Public `veyfert.testing`.
 - Optional: `zstd-stream`, automatic resharding, and saving the session when stopping to resume it on
   start, warning that the cache starts empty.
@@ -754,8 +753,16 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
       OpenAPI's default; the four that take a string or a list are lists. The 23 string enums
       become 290 constants, such as `api.has_option_link`; fields stay strings, since Discord adds
       values. The generator skips nothing now: 250 endpoints.
-  - Gateway:
-    - [ ] Automatic resharding.
+  - Gateway (done, tested in `gateway_test.v`):
+    - [x] Automatic resharding, as Seyfert's: `ClientOptions.resharding` (`interval`, 8 h by
+      default and 0 to turn it off, and `percentage`, 80). While this process runs every shard,
+      the client asks Discord for its recommended count, and once the guilds fill that much of
+      the current shards' capacity (2500 guilds each) it connects the new shards next to the
+      old ones. They identify through the same queue and load their guilds without passing on
+      events; once all have, `run` waits for them, they take over and the old shards close. If
+      they do not load in time, or the bot stops, they close instead, and it does not start
+      when Discord has fewer identifies left than it needs. The shard list became replaceable:
+      a lock of its own guards it and `shard_id_for`'s total.
   - Benchmarks:
     - [ ] RAM per guild and events per second, against Seyfert.
   - Documentation (asked on 2026-11-24: "make /docs a set of files explaining each feature, like

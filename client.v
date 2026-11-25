@@ -34,6 +34,9 @@ pub:
 	// Sessions saved by a previous run (`Client.sessions`): those shards resume instead of
 	// identifying.
 	sessions []ShardSession
+	// Resharding follows the shard count Discord recommends while the bot runs, when this
+	// process runs every shard; see Resharding.
+	resharding Resharding
 }
 
 // Client owns the gateway connections, the REST client, and the registered commands and listeners.
@@ -68,16 +71,19 @@ pub mut:
 	rest         rest.Rest
 	logger       &log.ThreadSafeLog
 mut:
-	intents              discord.Intents
-	compress             bool
-	zstd                 bool
-	presence             ?discord.Presence
-	gateway_url          string
-	max_message_bytes    int
-	saved_sessions       []ShardSession
-	shard_range          ?ShardRange
-	workers              int
-	interaction_workers  int
+	intents             discord.Intents
+	compress            bool
+	zstd                bool
+	presence            ?discord.Presence
+	gateway_url         string
+	max_message_bytes   int
+	saved_sessions      []ShardSession
+	shard_range         ?ShardRange
+	workers             int
+	interaction_workers int
+	resharding          Resharding
+	// Guards `shards` and `total_shards`, which resharding replaces.
+	shards_mu            &sync.RwMutex = sync.new_rwmutex()
 	shards               []&Shard
 	total_shards         int
 	identify_queue       &IdentifyQueue
@@ -95,6 +101,12 @@ mut:
 	bot_ready_sent bool
 	user           discord.User
 	app_id         discord.Snowflake
+	// Resharding: the shards loading next to the running ones, those that have, the shard
+	// threads `run` waits for, and whether `run` is ending.
+	standby        []&Shard
+	standby_loaded map[int]bool
+	running        []thread !
+	halting        bool
 	// Plugins and what they hook into: registered before `run`, then read without a lock.
 	plugins           []Installed
 	installing        string // the plugin whose setup is running
@@ -132,6 +144,7 @@ pub fn new_client(opts ClientOptions) &Client {
 		max_message_bytes:    opts.max_message_bytes
 		saved_sessions:       opts.sessions
 		shard_range:          opts.shards
+		resharding:           opts.resharding
 		workers:              if opts.workers > 0 { opts.workers } else { 1 }
 		interaction_workers:  if opts.interaction_workers > 0 {
 			opts.interaction_workers

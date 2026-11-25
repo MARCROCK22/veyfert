@@ -39,6 +39,12 @@ mut:
 	next_at         map[int]time.Time
 }
 
+fn (mut q IdentifyQueue) set_concurrency(n int) {
+	q.mu.lock()
+	q.max_concurrency = n
+	q.mu.unlock()
+}
+
 // wait blocks until shard `id` may identify. Each call reserves the next slot of its bucket,
 // so shards of one bucket go out `interval` apart.
 fn (mut q IdentifyQueue) wait(id int) {
@@ -59,7 +65,8 @@ fn (mut q IdentifyQueue) wait(id int) {
 // run connects every shard and blocks until all of them stop. It returns an error when
 // Discord rejects a shard for good, such as for a bad token. The plugins_ready hooks run before
 // the shards connect. When they stop, `run` waits for the events already queued, runs the
-// client_close hooks and tears the plugins down, returning their failures.
+// client_close hooks and tears the plugins down, returning their failures. While it runs every
+// shard, it reshards when Discord recommends more (see Resharding).
 pub fn (mut c Client) run() ! {
 	mut url := c.gateway_url
 	mut range := ShardRange{}
@@ -91,11 +98,10 @@ pub fn (mut c Client) run() ! {
 	if range.total <= 0 || range.start < 0 || range.start >= range.end || range.end > range.total {
 		return error('veyfert: invalid shard range ${range}')
 	}
-	c.total_shards = range.total
-	c.shards = []&Shard{}
+	mut shards := []&Shard{}
 	for id in range.start .. range.end {
 		saved := c.saved_sessions.filter(it.shard == id && it.session_id != '')
-		c.shards << &Shard{
+		shards << &Shard{
 			id:          id
 			total:       range.total
 			client:      c
@@ -105,22 +111,48 @@ pub fn (mut c Client) run() ! {
 			seq:         if saved.len > 0 { saved[0].seq } else { -1 }
 		}
 	}
+	c.shards_mu.lock()
+	c.total_shards = range.total
+	c.shards = shards
+	c.shards_mu.unlock()
 	c.run_hooks(.plugins_ready)
 	c.start_workers()
-	mut threads := []thread !{}
-	for mut s in c.shards {
-		threads << spawn s.run()
+	c.mu.lock()
+	c.halting = false
+	c.mu.unlock()
+	mut first := []thread !{}
+	for mut s in shards {
+		first << spawn s.run()
 	}
-	threads.wait() or {
-		c.close_plugins() or { c.logger.error(err.msg()) }
-		return err
+	c.mu.lock()
+	c.running << first
+	c.mu.unlock()
+	if c.resharding.interval > 0 && range.start == 0 && range.end == range.total {
+		spawn c.resharder()
 	}
+	// Resharding swaps in new shard threads before the old ones end.
+	for {
+		c.mu.lock()
+		batch := c.running
+		c.running = []thread !{}
+		c.mu.unlock()
+		if batch.len == 0 {
+			break
+		}
+		batch.wait() or {
+			c.halt()
+			c.close_plugins() or { c.logger.error(err.msg()) }
+			return err
+		}
+	}
+	c.halt()
 	c.close_plugins()!
 }
 
 // stop closes every shard; `run` returns once they have disconnected.
 pub fn (mut c Client) stop() {
-	for mut s in c.shards {
+	c.halt()
+	for mut s in c.current_shards() {
 		s.stop()
 	}
 }
@@ -136,11 +168,14 @@ pub fn (mut c Client) reconnect(shard int) ! {
 
 // shard_id_for returns the shard that receives the events of a guild.
 pub fn (c &Client) shard_id_for(guild_id discord.Snowflake) int {
-	return int((guild_id.value >> 22) % u64(if c.total_shards > 0 { c.total_shards } else { 1 }))
+	c.shards_mu.rlock()
+	total := c.total_shards
+	c.shards_mu.runlock()
+	return int((guild_id.value >> 22) % u64(if total > 0 { total } else { 1 }))
 }
 
 fn (c &Client) shard_by_id(id int) ?&Shard {
-	for s in c.shards {
+	for s in c.current_shards() {
 		if s.id == id {
 			return s
 		}
@@ -158,14 +193,15 @@ fn (c &Client) shard_for(guild_id discord.Snowflake) !&Shard {
 // latency is the mean time between a heartbeat and its acknowledgement, over every shard. It
 // is 0 until a heartbeat has been acknowledged; the first one goes out within one interval.
 pub fn (mut c Client) latency() time.Duration {
-	if c.shards.len == 0 {
+	mut shards := c.current_shards()
+	if shards.len == 0 {
 		return 0
 	}
 	mut total := time.Duration(0)
-	for mut s in c.shards {
+	for mut s in shards {
 		total += s.get_latency()
 	}
-	return total / time.Duration(c.shards.len)
+	return total / time.Duration(shards.len)
 }
 
 // set_presence updates the bot's presence on every shard. Shards that identify later use it too.
@@ -174,7 +210,7 @@ pub fn (mut c Client) set_presence(p discord.Presence) ! {
 	c.presence = p
 	c.mu.unlock()
 	text := json2.encode(Payload[PresencePayload]{ op: 3, d: gateway_presence(p) })
-	for mut s in c.shards {
+	for mut s in c.current_shards() {
 		s.send(text)!
 	}
 }
@@ -370,9 +406,10 @@ fn (mut c Client) shard_guilds_ready(shard int, guilds int) {
 		shard:  shard
 		guilds: guilds
 	})
+	count := c.current_shards().len
 	c.mu.lock()
 	c.ready_shards[shard] = true
-	all := c.ready_shards.len == c.shards.len && !c.bot_ready_sent
+	all := c.ready_shards.len == count && !c.bot_ready_sent
 	if all {
 		c.bot_ready_sent = true
 	}
@@ -381,7 +418,7 @@ fn (mut c Client) shard_guilds_ready(shard int, guilds int) {
 	if all {
 		c.emit(BotReady{
 			user:   user
-			shards: c.shards.len
+			shards: count
 		})
 	}
 }
@@ -401,7 +438,7 @@ pub:
 // starts empty.
 pub fn (mut c Client) sessions() []ShardSession {
 	mut out := []ShardSession{}
-	for mut s in c.shards {
+	for mut s in c.current_shards() {
 		s.mu.lock()
 		out << ShardSession{
 			shard:      s.id

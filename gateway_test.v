@@ -8,6 +8,7 @@ import veyfert.testing.ws
 import sync
 import time
 import veyfert.discord
+import veyfert.rest
 
 struct FakeOp {
 	op int
@@ -554,4 +555,87 @@ fn test_request_soundboard_sounds_sends_op_31_to_the_shard_of_the_guilds() {
 	}, 5 * time.second), 'no op 31 arrived'
 	assert fg.last(31).contains('"d":{"guild_ids":["5","6"]}')
 	c.stop()
+}
+
+// GatewayInfo answers /gateway/bot as Discord does once the bot needs more shards.
+@[heap]
+struct GatewayInfo {
+	port   int
+	shards int
+}
+
+fn (mut g GatewayInfo) send(req rest.HttpRequest) !rest.HttpResponse {
+	return rest.HttpResponse{
+		status: 200
+		body:   '{"url":"ws://127.0.0.1:${g.port}","shards":${g.shards},"session_start_limit":{"total":1000,"remaining":1000,"reset_after":0,"max_concurrency":1}}'
+	}
+}
+
+fn test_resharding_waits_until_the_shards_are_full_enough() {
+	assert !reshard_needed(4, 4, 80) // the same count
+	assert !reshard_needed(4, 3, 80)
+	assert !reshard_needed(4, 7, 80) // about 7000 guilds where 4 shards hold 10000: 70%
+	assert reshard_needed(4, 8, 80) // 80%
+	assert reshard_needed(1, 3, 80)
+	assert !reshard_needed(0, 3, 80)
+}
+
+fn test_resharding_moves_to_the_new_shards_once_they_load_their_guilds() {
+	mut fg := start_fake_gateway(31917, ['100'])
+	mut c := fake_client(31917)
+	c.rest.transport = &GatewayInfo{31917, 3}
+	raw := chan string{cap: 16}
+	c.on[RawGuildCreate](fn [raw] (g RawGuildCreate, mut _ Client) ! {
+		raw <- 'raw ${g.id}'
+	})
+	done := chan bool{cap: 1}
+	spawn fn [mut c, done] () {
+		c.run() or {}
+		done <- true
+	}()
+	select {
+		e := <-raw {
+			assert e == 'raw 100'
+		}
+		5 * time.second {
+			assert false, 'the first shard never loaded its guild'
+		}
+	}
+	mut old := c.current_shards()[0]
+	c.reshard_if_needed() or { assert false, err.msg() }
+	// Three shards identified with the new total and took over; the old one closed.
+	fg.mu.lock()
+	identifies := fg.payloads.filter(it.contains('"op":2'))
+	fg.mu.unlock()
+	assert identifies.len == 4 && identifies[0].contains('"shard":[0,1]')
+	for want in ['[0,3]', '[1,3]', '[2,3]'] {
+		assert identifies[1..].any(it.contains('"shard":${want}')), want
+	}
+	assert c.current_shards().map('${it.id}/${it.total}') == ['0/3', '1/3', '2/3']
+	assert c.shard_id_for(discord.Snowflake{u64(2) << 22}) == 2
+	assert old.is_stopping()
+	// The new shards loaded the guild too, without passing it on.
+	select {
+		e := <-raw {
+			assert false, 'a loading shard passed on ${e}'
+		}
+		200 * time.millisecond {
+		}
+	}
+	// `run` goes on with the new shards until the bot stops.
+	select {
+		_ := <-done {
+			assert false, 'run returned when the old shard closed'
+		}
+		300 * time.millisecond {
+		}
+	}
+	c.stop()
+	select {
+		_ := <-done {
+		}
+		5 * time.second {
+			assert false, 'run did not return after stop'
+		}
+	}
 }

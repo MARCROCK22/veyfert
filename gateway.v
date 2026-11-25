@@ -119,8 +119,10 @@ mut:
 	connected_once bool
 	pending_guilds map[u64]bool // guilds announced by READY that have not arrived yet
 	loading_guilds int
-	limiter        SendLimiter
-	zctx           voidptr // the zstd-stream decompressor of the connection (gateway_zstd_d_veyfert_zstd.v)
+	// Connected by resharding: it loads its guilds, but passes on no event until it takes over.
+	standby bool
+	limiter SendLimiter
+	zctx    voidptr // the zstd-stream decompressor of the connection (gateway_zstd_d_veyfert_zstd.v)
 }
 
 // run keeps the shard connected until it is stopped or Discord rejects it for good.
@@ -146,11 +148,13 @@ fn (mut s Shard) run() ! {
 			break
 		}
 		if code in fatal_close_codes {
-			s.client.emit(ShardDisconnect{
-				shard:  s.id
-				code:   code
-				reason: reason
-			})
+			if !s.is_standby() {
+				s.client.emit(ShardDisconnect{
+					shard:  s.id
+					code:   code
+					reason: reason
+				})
+			}
 			return error('shard ${s.id}: Discord closed the connection with ${code} (${reason}); check the token, the shard count and the intents')
 		}
 		if code in reset_close_codes {
@@ -162,12 +166,14 @@ fn (mut s Shard) run() ! {
 		} else {
 			'identifying again'
 		}}')
-		s.client.emit(ShardDisconnect{
-			shard:     s.id
-			code:      code
-			reason:    reason
-			resumable: resumable
-		})
+		if !s.is_standby() {
+			s.client.emit(ShardDisconnect{
+				shard:     s.id
+				code:      code
+				reason:    reason
+				resumable: resumable
+			})
+		}
 		if s.is_stopping() {
 			break
 		}
@@ -302,27 +308,18 @@ fn (mut s Shard) on_dispatch(env GatewayEnvelope) ! {
 		s.mu.unlock()
 	}
 	mut name := env.t or { return }
+	if s.is_standby() {
+		s.standby_dispatch(name, env.d)!
+		return
+	}
 	mut guilds_done := false
 	mut loaded := 0
 	match name {
 		'READY' {
 			ready := json2.decode[discord.Ready](env.d)!
-			s.mu.lock()
-			s.session_id = ready.session_id
-			s.resume_url = ready.resume_gateway_url
-			s.pending_guilds = map[u64]bool{}
-			if s.client.intents.has(.guilds) {
-				for g in ready.guilds {
-					s.pending_guilds[g.id.value] = true
-				}
-			}
-			loaded = s.pending_guilds.len
-			s.loading_guilds = loaded
-			guilds_done = loaded == 0
-			s.ready = true
-			reconnected := s.connected_once
-			s.connected_once = true
-			s.mu.unlock()
+			count, reconnected := s.begin_session(ready)
+			loaded = count
+			guilds_done = count == 0
 			s.client.shard_ready(s.id, ready)
 			if reconnected {
 				s.client.emit(ShardReconnect{
@@ -350,14 +347,12 @@ fn (mut s Shard) on_dispatch(env GatewayEnvelope) ! {
 		}
 		'GUILD_CREATE', 'GUILD_DELETE' {
 			guild := json2.decode[GuildId](env.d)!
-			s.mu.lock()
-			if guild.id.value in s.pending_guilds {
-				s.pending_guilds.delete(guild.id.value)
+			pending, last, count := s.guild_arrived(guild.id.value)
+			if pending {
 				name = 'RAW_${name}'
-				guilds_done = s.pending_guilds.len == 0
-				loaded = s.loading_guilds
+				guilds_done = last
+				loaded = count
 			}
-			s.mu.unlock()
 		}
 		'GUILD_MEMBERS_CHUNK' {
 			s.client.members_chunk(env.d)
@@ -371,6 +366,78 @@ fn (mut s Shard) on_dispatch(env GatewayEnvelope) ! {
 	if guilds_done {
 		s.client.shard_guilds_ready(s.id, loaded)
 	}
+}
+
+// begin_session keeps READY's session and the guilds that must arrive before the shard is
+// loaded. It returns how many those are, and whether the shard had connected before.
+fn (mut s Shard) begin_session(ready discord.Ready) (int, bool) {
+	s.mu.lock()
+	defer {
+		s.mu.unlock()
+	}
+	s.session_id = ready.session_id
+	s.resume_url = ready.resume_gateway_url
+	s.pending_guilds = map[u64]bool{}
+	if s.client.intents.has(.guilds) {
+		for g in ready.guilds {
+			s.pending_guilds[g.id.value] = true
+		}
+	}
+	s.loading_guilds = s.pending_guilds.len
+	s.ready = true
+	reconnected := s.connected_once
+	s.connected_once = true
+	return s.loading_guilds, reconnected
+}
+
+// guild_arrived crosses off a guild that READY announced. It tells whether the guild was one of
+// those, whether it was the last, and how many READY announced.
+fn (mut s Shard) guild_arrived(id u64) (bool, bool, int) {
+	s.mu.lock()
+	defer {
+		s.mu.unlock()
+	}
+	if id !in s.pending_guilds {
+		return false, false, s.loading_guilds
+	}
+	s.pending_guilds.delete(id)
+	return true, s.pending_guilds.len == 0, s.loading_guilds
+}
+
+// standby_dispatch follows the READY and the guilds of a shard that resharding connected, to
+// tell the client once it is loaded. The events are dropped: the old shards deliver them until
+// this one takes over.
+fn (mut s Shard) standby_dispatch(name string, data string) ! {
+	mut loaded := false
+	match name {
+		'READY' {
+			count, _ := s.begin_session(json2.decode[discord.Ready](data)!)
+			loaded = count == 0
+		}
+		'GUILD_CREATE', 'GUILD_DELETE' {
+			pending, last, _ := s.guild_arrived(json2.decode[GuildId](data)!.id.value)
+			loaded = pending && last
+		}
+		else {}
+	}
+	if loaded {
+		s.client.standby_shard_loaded(s.id)
+	}
+}
+
+fn (mut s Shard) is_standby() bool {
+	s.mu.lock()
+	defer {
+		s.mu.unlock()
+	}
+	return s.standby
+}
+
+// take_over makes a shard that resharding connected pass on its events.
+fn (mut s Shard) take_over() {
+	s.mu.lock()
+	s.standby = false
+	s.mu.unlock()
 }
 
 fn (mut s Shard) send_identify(generation int) ! {
