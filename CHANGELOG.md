@@ -32,8 +32,8 @@ What Seyfert has and the first version lacked (docs/PLAN.md, phase 8):
   `ctx.modal(form, custom_id:)`, guards and hooks on handlers, `c.collect[T]` and
   `ctx.collect_components`, and `discord.file_from_base64`.
 - **Utilities:** `veyfert.formatter`; the CDN URL of every image Discord serves; `mention()`,
-  `url()`, `display_name()`, `tag()`, `Snowflake.created_at()`, `discord.colors`, `parse_color`,
-  `rgb` and `parse_emoji`.
+  `url()`, `display_name()`, `tag()`, `Snowflake.created_at()`, `Snowflake.is_zero()`,
+  `discord.colors`, `parse_color`, `rgb` and `parse_emoji`.
 - **Cache:** `cache.Adapter`, with `MemoryAdapter`, `LimitedMemoryAdapter` and the conformance
   suite `check_adapter`, as a second level behind the in-memory cache (`cache.Options.adapter`).
 - **Plugins:** `info() PluginInfo` (version, imports, semver requirements, intents), `c.hook`,

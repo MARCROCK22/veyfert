@@ -54,6 +54,7 @@ Discord's IDs are `discord.Snowflake`, a `u64` that travels as a string in JSON.
 - `id.created_at()` is when it was made, as a `time.Time`; `id.unix_ms()` the same in
   milliseconds.
 - A literal: `discord.Snowflake{80351110224678912}`.
+- `id.is_zero()` tells an unset ID: `discord.Snowflake{}` is 0, which Discord never gives.
 
 ## Permissions
 

@@ -21,6 +21,11 @@ pub fn (s Snowflake) str() string {
 	return s.value.str()
 }
 
+// is_zero tells whether the ID is unset: Discord never gives 0, so `Snowflake{}` means none.
+pub fn (s Snowflake) is_zero() bool {
+	return s.value == 0
+}
+
 // unix_ms returns the creation time encoded in the ID, in milliseconds since the Unix epoch.
 pub fn (s Snowflake) unix_ms() u64 {
 	return (s.value >> 22) + discord_epoch

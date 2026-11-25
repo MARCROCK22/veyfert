@@ -56,7 +56,7 @@ fn (mut t Tickets) thread_of(key string) ?discord.Snowflake {
 		t.mu.unlock()
 	}
 	id := t.open[key] or { return none }
-	return if id == discord.Snowflake{} { none } else { id }
+	return if id.is_zero() { none } else { id }
 }
 
 fn (mut t Tickets) set(key string, thread_id discord.Snowflake) {
@@ -151,7 +151,7 @@ fn (f TicketForm) submit(mut ctx veyfert.ModalContext) ! {
 	tickets.set(key, ticket.id)
 	ctx.client.threads.add_member(ticket.id, user.id)!
 	// Mentioning the staff role adds its members to the private thread.
-	has_staff := staff_role_id != discord.Snowflake{}
+	has_staff := !staff_role_id.is_zero()
 	staff := if has_staff { ' ${formatter.role_mention(staff_role_id)}' } else { '' }
 	ctx.client.messages.write(ticket.id,
 		content:          '${user.mention()} opened a ticket.${staff}'
@@ -211,7 +211,7 @@ fn (h CloseTicket) run(mut ctx veyfert.ComponentContext) ! {
 	closer := ctx.author()
 	ctx.update(components: [])! // the answer to the click: the button goes away
 	ctx.client.messages.write(thread_id, content: '🔒 Closed by ${closer.username}.')!
-	if log_channel_id != discord.Snowflake{} {
+	if !log_channel_id.is_zero() {
 		ctx.client.messages.write(log_channel_id,
 			embeds: [
 				discord.Embed{

@@ -48,7 +48,7 @@ fn (mut c Client) run_prefix(raw string) {
 	c.mu.lock()
 	me := c.user
 	c.mu.unlock()
-	if me.id.value != 0 {
+	if !me.id.is_zero() {
 		prefixes << ['<@${me.id}>', '<@!${me.id}>']
 	}
 	prefixes.sort(a.len > b.len)

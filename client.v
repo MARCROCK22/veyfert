@@ -196,12 +196,12 @@ pub fn (mut c Client) bot_id() !discord.Snowflake {
 	c.mu.lock()
 	id := c.user.id
 	c.mu.unlock()
-	if id.value != 0 {
+	if !id.is_zero() {
 		return id
 	}
 	me := json2.decode[discord.User](c.rest.request(.get, '/users/@me')!)!
 	c.mu.lock()
-	if c.user.id.value == 0 {
+	if c.user.id.is_zero() {
 		c.user = me
 	}
 	c.mu.unlock()
@@ -213,7 +213,7 @@ pub fn (mut c Client) application_id() !discord.Snowflake {
 	c.mu.lock()
 	id := c.app_id
 	c.mu.unlock()
-	if id.value != 0 {
+	if !id.is_zero() {
 		return id
 	}
 	app := json2.decode[discord.Application](c.rest.request(.get, '/applications/@me')!)!

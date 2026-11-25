@@ -28,7 +28,7 @@ fn env_id(name string) discord.Snowflake {
 // welcome_channel is where greetings go: WELCOME_CHANNEL_ID, or the system channel of the
 // server, where Discord itself announces joins.
 fn welcome_channel(guild discord.Guild) ?discord.Snowflake {
-	if welcome_channel_id != discord.Snowflake{} {
+	if !welcome_channel_id.is_zero() {
 		return welcome_channel_id
 	}
 	return guild.system_channel_id
@@ -67,7 +67,7 @@ fn card(guild discord.Guild, user discord.User) veyfert.MessageOptions {
 fn greet(e discord.GuildMemberAdd, mut c veyfert.Client) ! {
 	guild_id := e.guild_id or { return }
 	user := e.user or { return }
-	if auto_role_id != discord.Snowflake{} && !user.bot {
+	if !auto_role_id.is_zero() && !user.bot {
 		// A failure here must not cost the greeting: log it and go on.
 		c.members.add_role(guild_id, user.id, auto_role_id, 'Role for new members') or {
 			c.logger.warn('could not give the role to ${user.username}: ${err}')
@@ -100,7 +100,7 @@ fn (p Preview) run(mut ctx veyfert.CommandContext) ! {
 	} else {
 		'This server has no system channel, so set WELCOME_CHANNEL_ID to greet new members'
 	}
-	role := if auto_role_id != discord.Snowflake{} {
+	role := if !auto_role_id.is_zero() {
 		', with the role ${formatter.role_mention(auto_role_id)}'
 	} else {
 		''

@@ -13,6 +13,12 @@ fn test_snowflakes_read_strings_and_numbers_and_write_strings() ! {
 	assert a.unix_ms() == u64(1462015105796)
 }
 
+fn test_is_zero_tells_an_unset_id() ! {
+	assert Snowflake{}.is_zero()
+	assert !Snowflake.parse('175928847299117063')!.is_zero()
+	assert (Snowflake.parse('') or { Snowflake{} }).is_zero()
+}
+
 fn test_intents_match_the_discord_bit_values() {
 	assert int(Intents.guilds | .guild_messages | .message_content) == 33281
 	assert int(Intents.auto_moderation_configuration) == 1 << 20
