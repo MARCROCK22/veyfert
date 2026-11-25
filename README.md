@@ -71,8 +71,16 @@ Most bots import `veyfert` and `veyfert.discord`. The repository also has `examp
 
 ## Install
 
-veyfert needs V 0.5 (master) with `json2`. Until it is on VPM, clone it into a folder named
-`veyfert` and add its parent folder to V's module path:
+veyfert needs V 0.5 (master) with `json2`. It is on VPM:
+
+```sh
+v install MARCROCK22.veyfert
+```
+
+VPM puts it under the `marcrock22` prefix, so a bot imports `marcrock22.veyfert` and
+`marcrock22.veyfert.discord`; in code the module is still `veyfert` (`veyfert.new_client`,
+`@[veyfert.Declare(...)]`). This guide imports `veyfert`, as a bot does when it uses a clone in a
+folder named `veyfert`, with that folder's parent on V's module path:
 
 ```sh
 git clone https://github.com/MARCROCK22/veyfert ~/vlibs/veyfert

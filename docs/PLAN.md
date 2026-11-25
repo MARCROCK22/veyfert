@@ -604,7 +604,7 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
     - (8) `intercept_send` changes or drops any payload a shard sends.
   - The repository is public on GitHub, and CI passes on Linux, macOS and Windows, `-race` included
     (risk 21 says what it suppresses).
-  - Not done: publishing on VPM (it needs the owner's account and approval), the 24 h run,
+  - Published on VPM as `MARCROCK22.veyfert`, imported as `marcrock22.veyfert`. Not done: the 24 h run,
     benchmarks against Seyfert and automatic resharding. The last one was left out: restarting the
     shards with a new total on the fly requires restructuring `run`, and the manual range
     (`ShardRange`) covers today's large bots.
