@@ -34,8 +34,9 @@ jobs:
         run: v run veyfert/tests/run_compile_fail.vsh
       - name: Examples build with warnings as errors
         run: |
-          v -W -path "$VPATH" -o basic veyfert/examples/basic
-          v -W -path "$VPATH" -o components veyfert/examples/components
+          for example in veyfert/examples/*/; do
+            v -W -path "$VPATH" -o "example-$(basename "$example")" "$example"
+          done
       - name: Documentation examples
         if: runner.os == 'Linux' # the examples do not depend on the platform
         run: v run veyfert/tests/check_docs.vsh

@@ -79,9 +79,9 @@ built in CI.
 | Data | [Cache](docs/cache.md) · [REST and shorters](docs/rest.md) · [Every endpoint](docs/rest-api.md) · [Discord's data](docs/models.md) · [Formatter](docs/formatter.md) |
 | More | [Languages](docs/i18n.md) · [Plugins](docs/plugins.md) · [Testing](docs/testing.md) · [Known V issues](docs/known-issues.md) |
 
-The repository also has `examples/` (two bots that build in CI), `tests/compile_fail/` (code that
-must not compile), `tools/gen_api.vsh` (the REST generator), `benchmarks/` and
-[docs/PLAN.md](docs/PLAN.md), the design and its decisions.
+The repository also has [examples/](examples/README.md) (complete bots that build in CI),
+`tests/compile_fail/` (code that must not compile), `tools/gen_api.vsh` (the REST generator),
+`benchmarks/` and [docs/PLAN.md](docs/PLAN.md), the design and its decisions.
 
 ## Known V issues
 
