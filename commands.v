@@ -28,6 +28,20 @@ pub:
 	name string
 }
 
+// EntryPoint declares an app's primary entry point command, which launches its Activity from
+// the App Launcher. Discord launches the Activity by itself, unless the struct also has
+// @[veyfert.AppHandler]: then `run` answers, with `ctx.launch_activity()` for instance.
+@[attribute]
+pub struct EntryPoint {
+pub:
+	name        string
+	description string
+}
+
+// AppHandler makes an entry point command send its interaction to the bot's `run`.
+@[attribute]
+pub struct AppHandler {}
+
 // Sub marks a field whose type is a subcommand. A subcommand with @[Sub] fields of its own
 // is a group, and Discord allows groups only directly under the command.
 @[attribute]
@@ -203,6 +217,7 @@ mut:
 	nsfw                       bool
 	contexts                   ?[]int
 	integration_types          ?[]int
+	handler                    ?int // entry points: 1 the app's `run`, 2 Discord launches it
 }
 
 struct Entry {
@@ -224,6 +239,11 @@ pub mut:
 	on_options_error        fn (mut ctx CommandContext, failure IError) !              = default_options_error
 	on_guard_error          fn (mut ctx CommandContext, reason string) !               = default_guard_error
 	on_bot_permissions_fail fn (mut ctx CommandContext, missing discord.Permissions) ! = default_bot_permissions_fail
+	// on_permissions_fail answers a prefix command whose author lacks its @[Perms]; Discord
+	// checks those for slash commands.
+	on_permissions_fail fn (mut ctx CommandContext, missing discord.Permissions) ! = default_permissions_fail
+	// on_internal_error gets the errors that hooks return; by default it logs them.
+	on_internal_error fn (mut ctx CommandContext, failure IError) ! = default_internal_error
 }
 
 // Commands holds the registered commands, their global guards and the default hooks.
@@ -233,12 +253,15 @@ pub mut:
 	// prefix returns the prefixes a message may start with to run a command, such as ['!'];
 	// set it, or ClientOptions.prefixes, to run commands from messages.
 	prefix ?fn (msg discord.Message) []string
+	// args_parser replaces how prefix commands read their arguments; see ArgsParser.
+	args_parser ?ArgsParser
 mut:
 	entries      []Entry
 	invokers     map[string]Invoker
 	guards       []GuardFn
 	prefix_names map[string]int // command names and aliases to their entry
 	observers    []fn (e CommandEvent)
+	member_perms map[string]discord.Permissions // @[Perms] of each command, by its name
 }
 
 interface Invoker {
@@ -259,11 +282,18 @@ pub fn (mut r Commands) add[T](proto T) {
 	mut slash := true
 	mut prefix := true
 	mut locale := ''
+	mut app_handler := false
 	$for a in T.attributes {
 		$if a is Declare {
 			cmd.kind = 1
 			cmd.name = a.name
 			cmd.description = a.description
+		} $else $if a is EntryPoint {
+			cmd.kind = 4
+			cmd.name = a.name
+			cmd.description = a.description
+		} $else $if a is AppHandler {
+			app_handler = true
 		} $else $if a is UserMenu {
 			cmd.kind = 2
 			cmd.name = a.name
@@ -295,13 +325,28 @@ pub fn (mut r Commands) add[T](proto T) {
 		}
 	}
 	if cmd.kind == 0 {
-		panic('veyfert: ${T.name} needs @[veyfert.Declare(...)], @[veyfert.UserMenu(...)] or @[veyfert.MessageMenu(...)]')
+		panic('veyfert: ${T.name} needs @[veyfert.Declare(...)], @[veyfert.EntryPoint(...)], @[veyfert.UserMenu(...)] or @[veyfert.MessageMenu(...)]')
 	}
-	options := r.node(proto, cmd.kind, cmd.name, []GuardFn{}, discord.no_permissions(), 0)
+	if cmd.kind == 4 {
+		if r.entries.any(it.json.kind == 4) {
+			panic('veyfert: an app has one entry point command, and ${T.name} would be a second one')
+		}
+		cmd.handler = if app_handler { 1 } else { 2 }
+		prefix = false
+	}
+	if perms := cmd.default_member_permissions {
+		r.member_perms[cmd.name] = discord.Permissions.parse(perms)
+	}
+	// An entry point that Discord launches never reaches the bot, so it needs no `run`.
+	options := if cmd.kind == 4 && !app_handler {
+		[]OptionJson{}
+	} else {
+		r.node(proto, cmd.kind, cmd.name, []GuardFn{}, discord.no_permissions(), 0)
+	}
 	if cmd.kind == 1 {
 		cmd.options = options
 	} else if options.len > 0 {
-		panic('veyfert: the menu command `${cmd.name}` cannot have options')
+		panic('veyfert: `${cmd.name}` cannot have options; only slash commands do')
 	}
 	validate_command(cmd)
 	if cmd.kind == 1 && prefix {
@@ -559,8 +604,10 @@ struct Bound[T] {
 	bot_perms discord.Permissions
 }
 
-// invoke runs a command: bot permissions, options, global guards, the guards of its groups,
-// its own guards, then `run`. Every failure goes to a hook, never back to the pool.
+// invoke runs a command: bot permissions, the author's permissions (prefix commands only),
+// on_before_options, options and check_options, on_before_guards, global guards, the guards of
+// its groups, its own guards, `run` and on_after_run. Every failure goes to a hook, never back
+// to the pool.
 fn (b Bound[T]) invoke(mut ctx CommandContext, options []discord.InteractionOption) {
 	mut cmd := b.proto
 	if u64(b.bot_perms) != 0 {
@@ -571,8 +618,41 @@ fn (b Bound[T]) invoke(mut ctx CommandContext, options []discord.InteractionOpti
 			return
 		}
 	}
+	// Discord checks @[Perms] for interactions, after each guild's own command permissions,
+	// which a check here would overrule. Messages have nobody else to check them.
+	if ctx.message != none {
+		required := ctx.client.commands.member_perms[ctx.path.all_before(' ')] or {
+			discord.no_permissions()
+		}
+		if member := ctx.interaction.member {
+			if u64(required) != 0 {
+				have := discord.Permissions.parse(member.permissions or { '0' })
+				missing := unsafe { discord.Permissions(u64(required) & ~u64(have)) }
+				if u64(missing) != 0 && !have.has(.administrator) {
+					hook_permissions_fail(cmd, mut ctx, missing)
+					return
+				}
+			}
+		}
+	}
+	if !hook_before(cmd, mut ctx, 'on_before_options') {
+		return
+	}
 	fill_options(mut cmd, options, ctx.resolved()) or {
 		hook_options_error(cmd, mut ctx, err)
+		return
+	}
+	// check_options may reject the options, or turn them into other fields, as Seyfert's
+	// option `value` callbacks do.
+	$for m in T.methods {
+		$if m.name == 'check_options' {
+			cmd.check_options(mut ctx) or {
+				hook_options_error(cmd, mut ctx, err)
+				return
+			}
+		}
+	}
+	if !hook_before(cmd, mut ctx, 'on_before_guards') {
 		return
 	}
 	for g in ctx.client.commands.guards {
@@ -599,7 +679,12 @@ fn (b Bound[T]) invoke(mut ctx CommandContext, options []discord.InteractionOpti
 	}
 	$for m in T.methods {
 		$if m.name == 'run' {
-			cmd.run(mut ctx) or { hook_run_error(cmd, mut ctx, err) }
+			cmd.run(mut ctx) or {
+				hook_run_error(cmd, mut ctx, err)
+				hook_after_run(cmd, mut ctx, err)
+				return
+			}
+			hook_after_run(cmd, mut ctx, none)
 		}
 	}
 }
@@ -627,12 +712,12 @@ fn hook_run_error[T](cmd T, mut ctx CommandContext, failure IError) {
 	ctx.failure = failure.msg()
 	$for m in T.methods {
 		$if m.name == 'on_run_error' {
-			cmd.on_run_error(mut ctx, failure) or { ctx.log_hook('on_run_error', err) }
+			cmd.on_run_error(mut ctx, failure) or { internal_error(cmd, mut ctx, 'on_run_error', err) }
 			return
 		}
 	}
 	ctx.client.commands.defaults.on_run_error(mut ctx, failure) or {
-		ctx.log_hook('on_run_error', err)
+		internal_error(cmd, mut ctx, 'on_run_error', err)
 	}
 }
 
@@ -641,12 +726,14 @@ fn hook_options_error[T](cmd T, mut ctx CommandContext, failure IError) {
 	ctx.failure = failure.msg()
 	$for m in T.methods {
 		$if m.name == 'on_options_error' {
-			cmd.on_options_error(mut ctx, failure) or { ctx.log_hook('on_options_error', err) }
+			cmd.on_options_error(mut ctx, failure) or {
+				internal_error(cmd, mut ctx, 'on_options_error', err)
+			}
 			return
 		}
 	}
 	ctx.client.commands.defaults.on_options_error(mut ctx, failure) or {
-		ctx.log_hook('on_options_error', err)
+		internal_error(cmd, mut ctx, 'on_options_error', err)
 	}
 }
 
@@ -656,13 +743,76 @@ fn hook_bot_permissions[T](cmd T, mut ctx CommandContext, missing discord.Permis
 	$for m in T.methods {
 		$if m.name == 'on_bot_permissions_fail' {
 			cmd.on_bot_permissions_fail(mut ctx, missing) or {
-				ctx.log_hook('on_bot_permissions_fail', err)
+				internal_error(cmd, mut ctx, 'on_bot_permissions_fail', err)
 			}
 			return
 		}
 	}
 	ctx.client.commands.defaults.on_bot_permissions_fail(mut ctx, missing) or {
-		ctx.log_hook('on_bot_permissions_fail', err)
+		internal_error(cmd, mut ctx, 'on_bot_permissions_fail', err)
+	}
+}
+
+fn hook_permissions_fail[T](cmd T, mut ctx CommandContext, missing discord.Permissions) {
+	ctx.outcome = 'permissions'
+	ctx.failure = missing.names()
+	$for m in T.methods {
+		$if m.name == 'on_permissions_fail' {
+			cmd.on_permissions_fail(mut ctx, missing) or {
+				internal_error(cmd, mut ctx, 'on_permissions_fail', err)
+			}
+			return
+		}
+	}
+	ctx.client.commands.defaults.on_permissions_fail(mut ctx, missing) or {
+		internal_error(cmd, mut ctx, 'on_permissions_fail', err)
+	}
+}
+
+// hook_before calls on_before_options or on_before_guards when the command has it. An error
+// from either stops the command and goes to on_internal_error.
+fn hook_before[T](cmd T, mut ctx CommandContext, hook string) bool {
+	$for m in T.methods {
+		$if m.name == 'on_before_options' {
+			if hook == 'on_before_options' {
+				cmd.on_before_options(mut ctx) or {
+					internal_error(cmd, mut ctx, hook, err)
+					return false
+				}
+			}
+		} $else $if m.name == 'on_before_guards' {
+			if hook == 'on_before_guards' {
+				cmd.on_before_guards(mut ctx) or {
+					internal_error(cmd, mut ctx, hook, err)
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+// hook_after_run calls on_after_run, with the error of `run` when it failed.
+fn hook_after_run[T](cmd T, mut ctx CommandContext, failure ?IError) {
+	$for m in T.methods {
+		$if m.name == 'on_after_run' {
+			cmd.on_after_run(mut ctx, failure) or { internal_error(cmd, mut ctx, 'on_after_run', err) }
+		}
+	}
+}
+
+// internal_error handles an error that a hook returned: the command's on_internal_error, or
+// the client's default, which logs it.
+fn internal_error[T](cmd T, mut ctx CommandContext, hook string, failure IError) {
+	wrapped := error('${hook}: ${failure.msg()}')
+	$for m in T.methods {
+		$if m.name == 'on_internal_error' {
+			cmd.on_internal_error(mut ctx, wrapped) or { ctx.log_hook('on_internal_error', err) }
+			return
+		}
+	}
+	ctx.client.commands.defaults.on_internal_error(mut ctx, wrapped) or {
+		ctx.log_hook('on_internal_error', err)
 	}
 }
 
@@ -678,13 +828,13 @@ fn guard_failed[T](cmd T, mut ctx CommandContext, failure IError) {
 		$for m in T.methods {
 			$if m.name == 'on_guard_error' {
 				cmd.on_guard_error(mut ctx, failure.reason) or {
-					ctx.log_hook('on_guard_error', err)
+					internal_error(cmd, mut ctx, 'on_guard_error', err)
 				}
 				return
 			}
 		}
 		ctx.client.commands.defaults.on_guard_error(mut ctx, failure.reason) or {
-			ctx.log_hook('on_guard_error', err)
+			internal_error(cmd, mut ctx, 'on_guard_error', err)
 		}
 		return
 	}
@@ -710,6 +860,14 @@ fn default_guard_error(mut ctx CommandContext, reason string) ! {
 
 fn default_bot_permissions_fail(mut ctx CommandContext, missing discord.Permissions) ! {
 	ctx.reply_error('I need these permissions here: ${missing.names()}.')!
+}
+
+fn default_permissions_fail(mut ctx CommandContext, missing discord.Permissions) ! {
+	ctx.reply_error('You need these permissions here: ${missing.names()}.')!
+}
+
+fn default_internal_error(mut ctx CommandContext, failure IError) ! {
+	ctx.client.logger.error('command `${ctx.path}`: ${failure}')
 }
 
 // command_path follows subcommand and group options down to the command that runs, and
@@ -886,7 +1044,7 @@ fn parse_channel_types(types string) []int {
 }
 
 fn validate_command(c CommandJson) {
-	if c.kind == 1 {
+	if c.kind == 1 || c.kind == 4 {
 		check_name('command', c.name)
 		check_description('command `${c.name}`', c.description)
 	} else {

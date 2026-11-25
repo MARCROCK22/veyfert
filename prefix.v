@@ -154,8 +154,9 @@ fn (mut c Client) message_interaction(msg discord.Message, name string, options 
 	}
 }
 
-// prefix_options turns arguments into the options and resolved data an interaction carries.
-fn (mut c Client) prefix_options(schema []OptionJson, args []string, msg discord.Message) !([]discord.InteractionOption, discord.Resolved) {
+// default_args reads options in schema order, or by name with `-name value`; the last string
+// option takes the rest of the line.
+fn default_args(schema []OptionJson, args []string) map[string]string {
 	names := schema.map(it.name)
 	is_name := fn [names] (arg string) bool {
 		return arg.len > 1 && arg[0] == `-` && arg[1..].to_lower() in names
@@ -188,6 +189,34 @@ fn (mut c Client) prefix_options(schema []OptionJson, args []string, msg discord
 		} else {
 			positional[j]
 		}
+	}
+	return values
+}
+
+// PrefixOption is an option a prefix command's arguments fill.
+pub struct PrefixOption {
+pub:
+	name     string
+	kind     int // 3 string, 4 integer, 5 boolean, 6 user, 7 channel, 8 role, 9 mentionable, 10 number
+	required bool
+}
+
+// ArgsParser turns the arguments of a prefix command, after its name and subcommands and split
+// as a shell would (quotes keep spaces), into option values by name. Values are text, as a user
+// types them; mentions and IDs are resolved afterwards. Attachment options take the message's
+// attachments and are not listed.
+pub type ArgsParser = fn (args []string, options []PrefixOption, msg discord.Message) map[string]string
+
+// prefix_options turns arguments into the options and resolved data an interaction carries.
+fn (mut c Client) prefix_options(schema []OptionJson, args []string, msg discord.Message) !([]discord.InteractionOption, discord.Resolved) {
+	values := if parse := c.commands.args_parser {
+		parse(args, schema.filter(it.kind != option_attachment).map(PrefixOption{
+			name:     it.name
+			kind:     it.kind
+			required: it.required
+		}), msg)
+	} else {
+		default_args(schema, args)
 	}
 	mut users := map[string]discord.User{}
 	mut members := map[string]discord.Member{}

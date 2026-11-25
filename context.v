@@ -180,6 +180,21 @@ pub fn (mut ctx InteractionContext) write(opts MessageOptions) ! {
 	ctx.replied = true
 }
 
+struct NoData {}
+
+// launch_activity answers by launching the app's Activity, which needs Activities enabled for
+// the app. Entry point commands with @[AppHandler] answer this way.
+pub fn (mut ctx InteractionContext) launch_activity() ! {
+	if ctx.message != none {
+		return error('veyfert: a prefix command cannot answer with this; it has no interaction')
+	}
+	if ctx.replied {
+		return error('veyfert: this interaction was already answered')
+	}
+	ctx.callback(12, NoData{}, [])!
+	ctx.replied = true
+}
+
 // defer_reply buys up to 15 minutes; Discord shows a loading state until `edit_response`.
 pub fn (mut ctx InteractionContext) defer_reply(ephemeral bool) ! {
 	if ctx.replied {

@@ -675,12 +675,21 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
       RAW_GUILD_DELETE. Tested in `events_parity_test.v`.
     - [x] The gateway request for soundboard sounds (op 31): `c.request_soundboard_sounds(guild_ids)`,
       answered by SOUNDBOARD_SOUNDS events; tested against the fake gateway.
-  - Commands:
-    - [ ] Entry point commands (Activities), with their context and the launch response.
-    - [ ] The hooks still missing: on_before_guards, on_before_options, on_after_run,
-      on_permissions_fail and on_internal_error, and on component and modal handlers too.
-    - [ ] Option values that a method transforms or rejects, as Seyfert's `value(ok, fail)`.
-    - [ ] A replaceable argument parser for prefix commands.
+  - Commands (done, tested in `commands_parity_test.v`):
+    - [x] Entry point commands (Activities): `@[EntryPoint(name:, description:)]`, which Discord
+      launches by itself, or with `@[AppHandler]` a `run` that answers, for example with
+      `ctx.launch_activity()` (callback 12). An app has one.
+    - [x] The hooks still missing: on_before_options, on_before_guards, on_after_run (with the
+      error of `run`), on_permissions_fail and on_internal_error (the errors hooks return), with
+      defaults on the client for the last two. on_permissions_fail only applies to prefix
+      commands: Discord checks @[Perms] for interactions after each guild's own command
+      permissions, which a second check would overrule. Component and modal handlers gained
+      guards (`HandlerGuard` fields, and `use` for every handler) and on_before_guards,
+      on_guard_error, on_after_run and on_internal_error.
+    - [x] Option values that a method transforms or rejects, as Seyfert's `value(ok, fail)`: a
+      `check_options(mut ctx) !` method runs after the options are filled; its error goes to
+      on_options_error, and it may set other fields. V has no callback per field.
+    - [x] A replaceable argument parser for prefix commands: `c.commands.args_parser`.
   - Components and modals:
     - [ ] custom_id matched by a regular expression, and a `filter` method on handlers.
     - [ ] Collectors for several components or events, with `timeout`, `idle`, `max` and the

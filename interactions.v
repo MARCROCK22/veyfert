@@ -40,6 +40,27 @@ pub:
 	text string
 }
 
+// HandlerGuard is a guard for component and modal handlers: a field whose type implements it
+// runs before `run` or `submit`, as a Guard does before a command. `stop()` ends silently, and
+// `deny(reason)` answers with the reason, through `on_guard_error` when the handler has it.
+pub interface HandlerGuard {
+mut:
+	check_handler(mut ctx InteractionContext) !
+}
+
+type HandlerGuardFn = fn (mut ctx InteractionContext) !
+
+fn handler_guard_fn[G HandlerGuard](g G) HandlerGuardFn {
+	return fn [g] [G](mut ctx InteractionContext) ! {
+		mut copy := g
+		copy.check_handler(mut ctx)!
+	}
+}
+
+fn check_handler_guard[G HandlerGuard](mut g G, mut ctx InteractionContext) ! {
+	g.check_handler(mut ctx)!
+}
+
 // ComponentContext is what a component handler receives: a click or a pick.
 @[heap]
 pub struct ComponentContext {
@@ -173,11 +194,21 @@ struct ComponentBound[T] {
 	proto T
 }
 
+// invoke runs a component handler: on_before_guards, the global handler guards, its own guards,
+// `run` and on_after_run.
 fn (b ComponentBound[T]) invoke(mut ctx ComponentContext) {
-	handler := b.proto
+	mut handler := b.proto
+	if !handler_guards(mut handler, mut ctx, ctx.client.components.guards) {
+		return
+	}
 	$for m in T.methods {
 		$if m.name == 'run' {
-			handler.run(mut ctx) or { handler_failed(handler, mut ctx, err) }
+			handler.run(mut ctx) or {
+				handler_failed(handler, mut ctx, err)
+				handler_after_run(handler, mut ctx, err)
+				return
+			}
+			handler_after_run(handler, mut ctx, none)
 		}
 	}
 }
@@ -192,6 +223,12 @@ pub struct Components {
 mut:
 	exact    map[string]ComponentInvoker
 	prefixes []PrefixRoute // longest first
+	guards   []HandlerGuardFn
+}
+
+// use adds a guard that runs before every component handler, ahead of its own guards.
+pub fn (mut r Components) use[G HandlerGuard](g G) {
+	r.guards << handler_guard_fn(g)
 }
 
 // add registers a handler: a struct with @[CustomId] or @[CustomIdPrefix] and
@@ -236,15 +273,25 @@ struct ModalBound[T] {
 	proto T
 }
 
+// invoke fills a modal's fields, then runs on_before_guards, the global handler guards, its own
+// guards, `submit` and on_after_run.
 fn (b ModalBound[T]) invoke(mut ctx ModalContext, values map[string][]string) {
 	mut form := b.proto
 	fill_modal(mut form, values) or {
 		ctx.reply_error('Invalid form: ${err.msg()}.') or {}
 		return
 	}
+	if !handler_guards(mut form, mut ctx, ctx.client.modals.guards) {
+		return
+	}
 	$for m in T.methods {
 		$if m.name == 'submit' {
-			form.submit(mut ctx) or { handler_failed(form, mut ctx, err) }
+			form.submit(mut ctx) or {
+				handler_failed(form, mut ctx, err)
+				handler_after_run(form, mut ctx, err)
+				return
+			}
+			handler_after_run(form, mut ctx, none)
 		}
 	}
 }
@@ -252,7 +299,13 @@ fn (b ModalBound[T]) invoke(mut ctx ModalContext, values map[string][]string) {
 // Modals routes modal submissions to the types that declare them.
 pub struct Modals {
 mut:
-	by_id map[string]ModalInvoker
+	by_id  map[string]ModalInvoker
+	guards []HandlerGuardFn
+}
+
+// use adds a guard that runs before every modal's `submit`, ahead of its own guards.
+pub fn (mut r Modals) use[G HandlerGuard](g G) {
+	r.guards << handler_guard_fn(g)
 }
 
 // add registers a modal type, whose `submit(mut ctx ModalContext) !` runs when a user sends it.
@@ -263,19 +316,97 @@ pub fn (mut r Modals) add[T](proto T) {
 	r.by_id[modal_json(proto).custom_id] = ModalInvoker(ModalBound[T]{proto})
 }
 
+// handler_guards runs on_before_guards, the global guards and the handler's own guards; false
+// means they stopped it.
+fn handler_guards[T, C](mut handler T, mut ctx C, global []HandlerGuardFn) bool {
+	$for m in T.methods {
+		$if m.name == 'on_before_guards' {
+			handler.on_before_guards(mut ctx) or {
+				handler_internal_error(handler, mut ctx, 'on_before_guards', err)
+				return false
+			}
+		}
+	}
+	for g in global {
+		g(mut ctx.InteractionContext) or {
+			handler_guard_failed(handler, mut ctx, err)
+			return false
+		}
+	}
+	$for field in T.fields {
+		$if field.typ is HandlerGuard {
+			mut g := handler.$(field.name)
+			check_handler_guard(mut g, mut ctx.InteractionContext) or {
+				handler_guard_failed(handler, mut ctx, err)
+				return false
+			}
+			handler.$(field.name) = g
+		}
+	}
+	return true
+}
+
+// handler_guard_failed: a silent stop ends the handler, a deny goes to on_guard_error or is
+// answered, and any other error is a failure of the handler.
+fn handler_guard_failed[T, C](handler T, mut ctx C, failure IError) {
+	if failure is GuardStop {
+		if failure.reason == '' {
+			return
+		}
+		$for m in T.methods {
+			$if m.name == 'on_guard_error' {
+				handler.on_guard_error(mut ctx, failure.reason) or {
+					handler_internal_error(handler, mut ctx, 'on_guard_error', err)
+				}
+				return
+			}
+		}
+		ctx.reply_error(failure.reason) or {
+			ctx.client.logger.error('${T.name}: the guard could not answer')
+		}
+		return
+	}
+	handler_failed(handler, mut ctx, failure)
+}
+
 // handler_failed calls the handler's `on_run_error` when it has one; otherwise it logs the error
 // and tells the user something went wrong.
 fn handler_failed[T, C](handler T, mut ctx C, failure IError) {
 	$for m in T.methods {
 		$if m.name == 'on_run_error' {
 			handler.on_run_error(mut ctx, failure) or {
-				ctx.client.logger.error('on_run_error of ${T.name}: ${err}')
+				handler_internal_error(handler, mut ctx, 'on_run_error', err)
 			}
 			return
 		}
 	}
 	ctx.client.logger.error('${T.name}: ${failure}')
 	ctx.reply_error('Something went wrong.') or {}
+}
+
+fn handler_after_run[T, C](handler T, mut ctx C, failure ?IError) {
+	$for m in T.methods {
+		$if m.name == 'on_after_run' {
+			handler.on_after_run(mut ctx, failure) or {
+				handler_internal_error(handler, mut ctx, 'on_after_run', err)
+			}
+		}
+	}
+}
+
+// handler_internal_error handles an error that a hook returned: the handler's
+// on_internal_error, or a log line.
+fn handler_internal_error[T, C](handler T, mut ctx C, hook string, failure IError) {
+	wrapped := error('${hook}: ${failure.msg()}')
+	$for m in T.methods {
+		$if m.name == 'on_internal_error' {
+			handler.on_internal_error(mut ctx, wrapped) or {
+				ctx.client.logger.error('on_internal_error of ${T.name}: ${err}')
+			}
+			return
+		}
+	}
+	ctx.client.logger.error('${T.name}: ${wrapped}')
 }
 
 fn (mut c Client) run_component(i discord.Interaction, inline &InlineReply) {
