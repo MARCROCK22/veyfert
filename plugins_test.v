@@ -56,7 +56,7 @@ fn test_plugins_set_up_in_order_and_tear_down_in_reverse() ! {
 	mut b := &Named{'b', trail}
 	c.install(mut a)!
 	c.install(mut b)!
-	c.teardown_plugins()
+	c.teardown_plugins()!
 	assert trail.lines == ['setup a', 'setup b', 'teardown b', 'teardown a']
 }
 

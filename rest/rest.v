@@ -163,6 +163,17 @@ pub fn (mut r Rest) observe(f fn (RestEvent)) {
 	r.observers << f
 }
 
+// observer_count and drop_observers let veyfert take back the observers a plugin added.
+pub fn (r &Rest) observer_count() int {
+	return r.observers.len
+}
+
+pub fn (mut r Rest) drop_observers(from int, to int) {
+	if to > from {
+		r.observers.delete_many(from, to - from)
+	}
+}
+
 // request sends a request within the rate limits and returns the response body, '' for 204.
 // It waits out 429s and retries 502 and 503 three times.
 pub fn (mut r Rest) request(method http.Method, path string, opts RequestOptions) !string {

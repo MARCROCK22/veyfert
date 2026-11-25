@@ -468,12 +468,24 @@ fn has_method[T](name string) bool {
 fn guard_fn[G Guard](g G) GuardFn {
 	return fn [g] [G](mut ctx CommandContext) ! {
 		mut copy := g
-		copy.check(mut ctx)!
+		check_guard(mut copy, mut ctx)!
 	}
 }
 
+// check_guard runs a guard inside the guard wrappers. The closure gets pointers: capturing a
+// `mut` parameter would copy it, and lose what the guard changes.
 fn check_guard[G Guard](mut g G, mut ctx CommandContext) ! {
-	g.check(mut ctx)!
+	if ctx.client.guard_wrappers.len == 0 {
+		g.check(mut ctx)!
+		return
+	}
+	gp := &g
+	cp := &ctx
+	ctx.client.wrap_guard(&ctx.InteractionContext, typeof[G]().name, fn [gp, cp] [G]() ! {
+		mut guard := unsafe { gp }
+		mut context := unsafe { cp }
+		guard.check(mut context)!
+	})!
 }
 
 // option_schema reads the options of a command from the fields of T. Required options go first,
@@ -919,7 +931,19 @@ fn (mut c Client) run_autocomplete(i discord.Interaction, inline &InlineReply) {
 		value:       option_text(focused.value)
 		options:     options
 	}
-	invoker.complete(mut ctx) or { c.logger.error('autocomplete of `${path}`: ${err}') }
+	mut next := fn [invoker, ctx] () ! {
+		mut context := unsafe { ctx }
+		invoker.complete(mut context)!
+	}
+	for idx := c.complete_wrappers.len - 1; idx >= 0; idx-- {
+		w := c.complete_wrappers[idx]
+		inner := next
+		next = fn [w, ctx, inner] () ! {
+			mut context := unsafe { ctx }
+			w(mut context, inner)!
+		}
+	}
+	next() or { c.logger.error('autocomplete of `${path}`: ${err}') }
 }
 
 fn find_option(options []discord.InteractionOption, name string) ?discord.InteractionOption {

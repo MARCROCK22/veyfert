@@ -5,6 +5,7 @@ import log
 import os
 import crypto.rand as crand
 import sync
+import sync.stdatomic
 import time
 import v.vmod
 import veyfert.cache
@@ -94,13 +95,21 @@ mut:
 	bot_ready_sent bool
 	user           discord.User
 	app_id         discord.Snowflake
-	// The handler pool.
-	plugins           []Plugin
+	// Plugins and what they hook into: registered before `run`, then read without a lock.
+	plugins           []Installed
+	installing        string // the plugin whose setup is running
+	hooks             []HookFn
+	guard_wrappers    []GuardWrapper
+	complete_wrappers []AutocompleteWrapper
 	interceptors      []fn (name string, raw string) ?string
 	send_interceptors []fn (shard int, payload string) ?string
-	jobs              chan Job
-	interaction_jobs  chan Job
-	workers_started   bool
+	shared_mu         &sync.RwMutex = sync.new_rwmutex()
+	shared            map[string]SharedEntry
+	// The handler pool; `pending` counts the jobs queued and not yet run.
+	jobs             chan Job
+	interaction_jobs chan Job
+	pending          &stdatomic.AtomicVal[i64] = stdatomic.new_atomic(i64(0))
+	workers_started  bool
 }
 
 pub fn new_client(opts ClientOptions) &Client {
@@ -228,7 +237,9 @@ pub:
 
 // upload_commands registers the commands with Discord, replacing the previous set of each scope:
 // global commands globally and @[Guilds] commands in their servers, or all of them in `guild_id`.
+// The before_upload hooks run first.
 pub fn (mut c Client) upload_commands(opts UploadOptions) ! {
+	c.run_hooks(.before_upload)
 	app := c.rest.get[discord.Application]('/oauth2/applications/@me')!
 	mut scopes := map[string][]CommandJson{}
 	if guild_id := opts.guild_id {

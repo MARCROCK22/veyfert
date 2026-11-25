@@ -57,7 +57,9 @@ fn (mut q IdentifyQueue) wait(id int) {
 }
 
 // run connects every shard and blocks until all of them stop. It returns an error when
-// Discord rejects a shard for good, such as for a bad token.
+// Discord rejects a shard for good, such as for a bad token. The plugins_ready hooks run before
+// the shards connect. When they stop, `run` waits for the events already queued, runs the
+// client_close hooks and tears the plugins down, returning their failures.
 pub fn (mut c Client) run() ! {
 	mut url := c.gateway_url
 	mut range := ShardRange{}
@@ -103,16 +105,17 @@ pub fn (mut c Client) run() ! {
 			seq:         if saved.len > 0 { saved[0].seq } else { -1 }
 		}
 	}
+	c.run_hooks(.plugins_ready)
 	c.start_workers()
 	mut threads := []thread !{}
 	for mut s in c.shards {
 		threads << spawn s.run()
 	}
 	threads.wait() or {
-		c.teardown_plugins()
+		c.close_plugins() or { c.logger.error(err.msg()) }
 		return err
 	}
-	c.teardown_plugins()
+	c.close_plugins()!
 }
 
 // stop closes every shard; `run` returns once they have disconnected.

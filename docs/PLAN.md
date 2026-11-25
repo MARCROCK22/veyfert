@@ -355,7 +355,9 @@ function-typed fields compile.
 - `interface Plugin { name() string; setup(mut c Client) !; teardown(mut c Client) ! }`, with teardown
   in reverse order. Plugins use the client's public API plus hook lists: REST and command observers,
   and gateway interceptors.
-- Requirements with `semver` and a typed `shared` registry when a plugin needs them, not before.
+- Phase 8 completes them: an optional `info() PluginInfo` (version, imports, semver requirements,
+  intents), lifecycle hooks, a typed `SharedKey[T]` registry, guard and autocomplete wrappers, and
+  ownership of what each plugin registers (see Phase 8).
 - Official plugins: cooldown (a guard) and scheduler.
 
 ### 4.12 Interactions over HTTP
@@ -720,19 +722,41 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
       in-memory cache stays the first level, so reads cost no decoding; `Options.adapter` (with
       `cache.new`) adds a second level that gets every write and answers what memory lacks,
       such as what another process wrote to a shared Redis. Messages stay in memory only.
-  - Plugins:
-    - [ ] Requirements (semver) and imports between plugins, ordering, a typed shared registry
+  - Plugins (done, tested in `plugins_parity_test.v`):
+    - [x] Requirements (semver) and imports between plugins, ordering, a typed shared registry
       with disposal, lifecycle hooks (before commands load, plugins ready, client close),
       contributions that teardown removes, plugin intents, guard and autocomplete wrappers, and
-      errors that name the plugin, with an aggregate error.
+      errors that name the plugin, with an aggregate error. A plugin may have
+      `info() PluginInfo`: its `version`, the plugins it `imports` (installed first, once by
+      name; a cycle fails), what it `requires` (a name and a semver range, or optional, which
+      only warns) and the `intents` it adds. Names are unique. `c.hook(.plugins_ready |
+      .before_upload | .client_close, f)` runs code at those moments (Seyfert's
+      `commands:beforeLoad` becomes before_upload, since commands are added in code).
+      `SharedKey[T]{name}.set(mut c, value, dispose)` and `.get(c)` share typed values, disposed
+      when their plugin goes. `c.wrap_guards` runs around every guard of commands, components and
+      modals, and `c.wrap_autocomplete` around autocomplete handlers. What a plugin registers in
+      `setup` (22 registries: listeners, interceptors, REST and command observers, commands,
+      components, modals, guards, hooks, wrappers, shared values) is taken back when it is torn
+      down, or at once when its setup fails; the imports that one `install` set up are torn down
+      then too. `run` now waits for the queued events before client_close and teardown, and
+      returns their failures: `PluginError` names the plugin and the phase, `PluginErrors`
+      gathers several.
+    - Not ported, by design: Seyfert's client and context type extensions (TypeScript typing; a
+      plugin exposes its own API or a shared value), handler construction and transformers
+      (class injection), cache resources (the cache adapter covers storage), `langs.contribute`
+      (`Langs[T]` is typed), `reload`, diagnostics records (logs say the same), `instanceId` (the
+      name is the identity) and an `order` per contribution (they follow the plugin order).
   - REST generator:
     - [ ] The 3 endpoints that only take multipart, the 18 array query parameters and string enums.
   - Gateway:
     - [ ] Automatic resharding.
   - Benchmarks:
     - [ ] RAM per guild and events per second, against Seyfert.
-  - Documentation:
-    - [ ] The README and CHANGELOG cover everything above.
+  - Documentation (asked on 2026-11-24: "make /docs a set of files explaining each feature, like
+    the cache, the API, the gateway, resharding... everything, with usage examples"):
+    - [ ] `docs/`: one file per feature, each with usage examples, and an index; written after the
+      code above is done, so they cover resharding too. `PLAN.md` stays in `docs/`.
+    - [ ] The README links to them, and the README and CHANGELOG cover everything above.
 
 ## 7. Risks and V gaps found
 
@@ -760,6 +784,7 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
 | 20 | The `zero()` that V generates for a `@[flag]` enum is not found through a module prefix: `discord.Permissions.zero()` gives `unknown function: Permissions.zero`. User-defined static methods (`discord.Permissions.parse`) do work | The split by layer (phase 7) | `discord.no_permissions()` | [vlang/v#32882](https://github.com/vlang/v/issues/32882) |
 | 21 | `net.websocket` has data races that `-race` reports: it masks every frame with `rand.bytes()`, the global generator, which `rand`'s README says is not thread safe; `net.TcpConn.read` and `read_ptr` take the connection by value, so each read copies the struct while a write on another thread updates it; and `Client.close()` closes the socket while `listen()` may be in `recv()` on it | The first `-race` run in CI (phase 7) | veyfert uses `crypto.rand`, never the global generator. Its test WebSocket server reads through its own copy of the connection and shuts the socket down instead of closing it from another thread. CI suppresses only those three races inside `net.websocket` (`tests/tsan.supp`) | [vlang/v#32886](https://github.com/vlang/v/issues/32886), [vlang/v#32888](https://github.com/vlang/v/issues/32888), [vlang/v#32887](https://github.com/vlang/v/issues/32887) |
 | 22 | Over `wss://`, `net.websocket` reads the TLS connection in `listen()` while other threads write to it; [vlang/v#31772](https://github.com/vlang/v/issues/31772) explains that neither Mbed TLS nor OpenSSL supports concurrent calls on one connection | vlib's code and that issue (phase 7); `-race` does not see it, because the tests use `ws://` | None yet: the shard reads on its own thread and writes heartbeats and payloads from others. Doing it safely needs non-blocking TLS with a lock, which belongs in `net.ssl` | [vlang/v#31772](https://github.com/vlang/v/issues/31772) (open) |
+| 23 | Appending a struct that implements `IError` to an `[]IError` with `<<` stores the struct's bytes as the interface: calling `msg()` on it panics with `interface method IError.msg not implemented`. Other interfaces, and `error()` values, are fine | The plugin teardown errors (phase 8); the generated C pushes the `main__MyError` value into the array of `IError` | Cast first: `failures << IError(PluginError{...})` | [vlang/v#32893](https://github.com/vlang/v/issues/32893) |
 
 ## 8. Decisions taken by default
 

@@ -79,12 +79,23 @@ type HandlerGuardFn = fn (mut ctx InteractionContext) !
 fn handler_guard_fn[G HandlerGuard](g G) HandlerGuardFn {
 	return fn [g] [G](mut ctx InteractionContext) ! {
 		mut copy := g
-		copy.check_handler(mut ctx)!
+		check_handler_guard(mut copy, mut ctx)!
 	}
 }
 
+// check_handler_guard runs a handler guard inside the guard wrappers, as check_guard does.
 fn check_handler_guard[G HandlerGuard](mut g G, mut ctx InteractionContext) ! {
-	g.check_handler(mut ctx)!
+	if ctx.client.guard_wrappers.len == 0 {
+		g.check_handler(mut ctx)!
+		return
+	}
+	gp := &g
+	cp := &ctx
+	ctx.client.wrap_guard(cp, typeof[G]().name, fn [gp, cp] [G]() ! {
+		mut guard := unsafe { gp }
+		mut context := unsafe { cp }
+		guard.check_handler(mut context)!
+	})!
 }
 
 // ComponentContext is what a component handler receives: a click or a pick.
@@ -318,6 +329,7 @@ fn (b ComponentBound[T]) passes(mut ctx ComponentContext) bool {
 struct PrefixRoute {
 	prefix  string
 	invoker ComponentInvoker
+	seq     int // the order routes were added in, which sorting by length loses
 }
 
 struct RegexRoute {
@@ -332,6 +344,7 @@ mut:
 	prefixes []PrefixRoute // longest first
 	regexes  []RegexRoute  // in the order they were added
 	guards   []HandlerGuardFn
+	next_seq int
 }
 
 // use adds a guard that runs before every component handler, ahead of its own guards.
@@ -351,7 +364,8 @@ pub fn (mut r Components) add[T](proto T) {
 			r.exact[a.id] = ComponentInvoker(ComponentBound[T]{proto})
 			routed = true
 		} $else $if a is CustomIdPrefix {
-			r.prefixes << PrefixRoute{a.prefix, ComponentInvoker(ComponentBound[T]{proto})}
+			r.prefixes << PrefixRoute{a.prefix, ComponentInvoker(ComponentBound[T]{proto}), r.next_seq}
+			r.next_seq++
 			r.prefixes.sort(a.prefix.len > b.prefix.len)
 			routed = true
 		} $else $if a is CustomIdRegex {

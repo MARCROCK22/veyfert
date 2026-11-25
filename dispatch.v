@@ -330,19 +330,37 @@ fn (mut c Client) dispatch(shard int, name string, raw_in string) {
 	}
 	if name == 'INTERACTION_CREATE' {
 		if !taken {
-			c.interaction_jobs <- job
+			c.queue(c.interaction_jobs, job)
 		}
 	} else if name == 'MESSAGE_CREATE' && c.commands.prefix != none {
 		// Prefix commands run on the command pool; listeners still get the message.
-		c.interaction_jobs <- Job{
+		c.queue(c.interaction_jobs, Job{
 			...job
 			command: true
-		}
+		})
 		if c.raw_listeners.len > 0 || c.listeners[name].len > 0 {
-			c.jobs <- job
+			c.queue(c.jobs, job)
 		}
 	} else if c.raw_listeners.len > 0 || (!duplicate && c.listeners[name].len > 0) {
-		c.jobs <- job
+		c.queue(c.jobs, job)
+	}
+}
+
+// queue hands a job to a pool; it counts as pending until a worker has run it.
+fn (mut c Client) queue(jobs chan Job, job Job) {
+	c.pending.add(1)
+	jobs <- job
+}
+
+// drain waits, for up to `limit`, until the pools have run every queued job.
+fn (mut c Client) drain(limit time.Duration) {
+	deadline := time.now().add(limit)
+	for c.pending.load() > 0 {
+		if time.now() > deadline {
+			c.logger.warn('handlers still busy after ${limit}; going on without them')
+			return
+		}
+		time.sleep(5 * time.millisecond)
 	}
 }
 
@@ -363,6 +381,7 @@ fn (mut c Client) worker(jobs chan Job) {
 	for {
 		job := <-jobs or { return }
 		c.run_job(job)
+		c.pending.sub(1)
 	}
 }
 
