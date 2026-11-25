@@ -16,3 +16,4 @@ warnings as errors.
 | [basic](basic/main.v) | Ping, a search with autocomplete, settings, a slow command, context menus | Options, subcommands, guards, prefix commands, deferring | — |
 | [components](components/main.v) | Buttons, a select menu, a confirmation, a modal, a poll, a card | Components v1 and v2, modals, waiting for a click | — |
 | [moderation](moderation/main.v) | Ban, unban, kick, timeout, purge and warnings | Permissions, the role hierarchy, DMs, `check_options`, one error hook for every command, prefix commands | — |
+| [welcome](welcome/main.v) | Greets new members with a card and a role, and says goodbye | Gateway events as plain functions, the cache, allowed mentions, settings from the environment | Server Members |
