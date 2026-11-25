@@ -31,7 +31,7 @@
   needed.
 - **REST models generated** from Discord's official OpenAPI spec. Gateway payloads are written by
   hand.
-- **Eight phases**, each with an exit criterion that can be checked. Phase 0 is a vertical spike
+- **Eleven phases**, each with an exit criterion that can be checked. Phase 0 is a vertical spike
   that validates all of this with a real bot.
 
 ## 1. Analysis of Seyfert
@@ -419,6 +419,7 @@ veyfert/
 | 7 | Production and publishing | Public `veyfert.testing`, docs, examples and benchmarks; CI on the three systems and published on VPM |
 | 8 | Seyfert parity | Every item of the phase 8 checklist is done, tested and green in CI |
 | 9 | Example bots | Every bot of the phase 9 list is in `examples/`, builds with `-W` in CI, and was driven through `veyfert.testing` and started against Discord |
+| 10 | Gaps and ideas | Each item of the phase 10 list is done, or dropped with the reason written down |
 
 Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gateway and REST.
 
@@ -829,6 +830,67 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
   - [ ] rps: rock, paper, scissors against a member or the bot.
   - [ ] auto-thread: a thread for every message in chosen channels.
   - [ ] reaction-roles: roles given and taken by reactions on a message.
+
+**Phase 10 — Gaps and ideas.**
+- Listed on 2026-11-25, when the user asked for everything that could not be ported, what is
+  still pending and what would be worth adding. Nothing here is started. The sources: §1.4, the
+  "not ported" lists of phase 8, the risks in §7, a comparison of Seyfert 6.0.0's `GuildMember`
+  and command context with veyfert, and what the example bots of phase 9 needed.
+- Not ported, for reference; these are decisions, not tasks:
+  - By design (§1.4 and phase 8): workers (`WorkerManager`, `WorkerClient`, the worker cache
+    adapter, the REST proxy between workers, hot reload with session handover); loading code at
+    runtime (`locations`, `@AutoLoad`, `reload()`, the watcher, `seyfert.config`, events and
+    languages read from folders); TypeScript typing (`SeyfertRegistry`, `ParseClient`,
+    `declare module`, the plugins' client and context extensions); what `Proxy` builds (the REST
+    router, `LangRouter`, the CDN router); builders with chained setters; structure classes and
+    `Transformers`; `Collection` and `LimitedCollection`; terminal colors and the mixer;
+    `SeyfertError`'s catalog of codes; the plugins' `handlers.construct` and `transform`, cache
+    resources, `langs.contribute`, `reload`, diagnostics, `instanceId` and `order`; voice audio
+    (joining and leaving a channel work: `update_voice_state`). Nor V's ORM and `db`, its JS and
+    WASM backends, `-autofree` or `-gc none` (§2).
+  - Limited by V (§7): TLS over `wss://` read on one thread while others write (risk 22, no
+    workaround yet); polling instead of `select` (risk 14); a small HTTP/1.1 server instead of
+    `net.http.Server` (risk 17); names and lengths checked at registration, not at compile time
+    (risk 4); attributes with one value and no defaults (risks 3 and 12); flat models because of
+    `json2`'s sum types (risk 1).
+- Pending:
+  - [ ] The 23 example bots of phase 9.
+  - [ ] Benchmarks against Seyfert (phase 8).
+  - [ ] The 24 h run with stable memory, phase 1's exit criterion.
+  - [ ] Coordinated processes, a `veyfert.workers`: one identify queue for every process, a
+    shared global rate limit, routing between processes, resharding with several processes and
+    supervision. Proposed, not decided.
+  - [ ] Report to V the issues that could not be isolated yet: risks 14, 16 and 17.
+  - [ ] Member checks such as Seyfert's `GuildMember.manageable()`, `bannable()`, `kickable()` and
+    `moderatable()`: the role hierarchy and the bot's permissions. The moderation and role-menu
+    examples wrote their own.
+  - [ ] Context shortcuts such as Seyfert's `ctx.guild()`, `ctx.channel()`, `ctx.me()`,
+    `fetchMember()` and `inGuild()`, from the cache or REST.
+  - [ ] `veyfert.testing`: a `user_menu` builder, and resolved data for user, member, role and
+    channel options, which the moderation and tictactoe tests wrote by hand.
+  - [ ] Forwarding messages: `discord.MessageReference` has no `type`, so the shorters only
+    reply; `veyfert.rest.api` can forward.
+  - [ ] The privileged intents of the test application, a setting in the Developer Portal, so
+    the bots that need them can be started against Discord.
+- Ideas:
+  - [ ] Durations such as `1d12h` as a helper: the moderation, reminders and giveaway examples
+    each have the same function.
+  - [ ] Safe JSON storage (a temporary file, then a rename), perhaps an official plugin: the
+    levels, reminders, tags and giveaway examples each have it.
+  - [ ] Answers by route in `veyfert.testing`'s fake REST, such as
+    `api.on(.get, '/channels/300/messages', body)`: answering in order made the example tests
+    fragile.
+  - [ ] An official Redis cache adapter; the interface exists, with no implementation of it.
+  - [ ] A graceful stop on SIGINT and SIGTERM, built in.
+  - [ ] A metrics plugin, such as Prometheus, on the REST and command observers.
+  - [ ] Performance, at the ceilings that the `ponytail:` comments name: a lock per cache
+    resource, channels indexed by guild, a ring buffer for cached messages, condition variables
+    instead of polling every 10 or 50 ms (it waits for V's `select`, risk 14), and custom ID
+    regular expressions compiled once.
+  - [ ] An embed paginator with buttons.
+  - [ ] Cooldowns per guild or per channel; `veyfert.cooldown` counts per user.
+  - [ ] A voice audio module, `veyfert.voice`: the voice gateway, UDP and Opus. A large project.
+  - [ ] The HTML reference that `v doc` generates, on GitHub Pages.
 
 ## 7. Risks and V gaps found
 
