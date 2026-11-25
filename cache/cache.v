@@ -6,6 +6,7 @@ import veyfert.discord
 
 // CacheOptions chooses what the cache keeps. Everything but messages is on; each resource also
 // needs the intents that bring its events.
+@[params]
 pub struct Options {
 pub:
 	guilds          bool = true
@@ -20,6 +21,9 @@ pub:
 	stage_instances bool = true
 	bans            bool = true // only the bans seen since startup
 	messages        int // messages kept per channel; 0 keeps none
+	// adapter also keeps every resource above but messages, and answers what memory lacks;
+	// see Adapter. Make the cache with `cache.new` for it to take effect.
+	adapter ?Adapter
 }
 
 // MemberEvent is the part of MESSAGE_REACTION_ADD and TYPING_START that the cache keeps.
@@ -49,6 +53,57 @@ mut:
 	stage_instances map[u64]map[u64]discord.StageInstance
 	bans            map[u64]map[u64]bool
 	messages        map[u64][]discord.Message
+	adapter         ?Adapter
+}
+
+// new makes a cache, with the adapter of `opts` when it has one.
+pub fn new(opts Options) &Cache {
+	return &Cache{
+		options: opts
+		adapter: opts.adapter
+	}
+}
+
+// persist writes a resource to the adapter, when there is one; the cache's lock is held.
+fn (mut c Cache) persist(key string, json string) {
+	if mut a := c.adapter {
+		a.set(key, json)
+	}
+}
+
+fn (mut c Cache) unpersist(key string) {
+	if mut a := c.adapter {
+		a.remove(key)
+	}
+}
+
+fn (mut c Cache) unpersist_prefix(prefix string) {
+	if mut a := c.adapter {
+		for key in a.scan(prefix) {
+			a.remove(key)
+		}
+	}
+}
+
+// stored reads a key from the adapter.
+fn (mut c Cache) stored(key string) ?string {
+	if mut a := c.adapter {
+		return a.get(key)
+	}
+	return none
+}
+
+// stored_values reads every key that starts with `prefix` from the adapter.
+fn (mut c Cache) stored_values(prefix string) []string {
+	mut values := []string{}
+	if mut a := c.adapter {
+		for key in a.scan(prefix) {
+			if value := a.get(key) {
+				values << value
+			}
+		}
+	}
+	return values
 }
 
 pub fn (mut c Cache) guild(id discord.Snowflake) ?discord.Guild {
@@ -56,7 +111,10 @@ pub fn (mut c Cache) guild(id discord.Snowflake) ?discord.Guild {
 	defer {
 		c.mu.runlock()
 	}
-	return c.guilds[id.value] or { return none }
+	if g := c.guilds[id.value] {
+		return g
+	}
+	return json2.decode[discord.Guild](c.stored('guild:${id}')?) or { return none }
 }
 
 pub fn (mut c Cache) guilds() []discord.Guild {
@@ -72,7 +130,10 @@ pub fn (mut c Cache) channel(id discord.Snowflake) ?discord.Channel {
 	defer {
 		c.mu.runlock()
 	}
-	return c.channels[id.value] or { return none }
+	if ch := c.channels[id.value] {
+		return ch
+	}
+	return json2.decode[discord.Channel](c.stored('channel:${id}')?) or { return none }
 }
 
 // channels lists the channels and threads of a guild.
@@ -82,7 +143,13 @@ pub fn (mut c Cache) channels(guild_id discord.Snowflake) []discord.Channel {
 	defer {
 		c.mu.runlock()
 	}
-	return c.channels.values().filter((it.guild_id or { discord.Snowflake{} }) == guild_id)
+	channels := c.channels.values().filter((it.guild_id or { discord.Snowflake{} }) == guild_id)
+	if channels.len > 0 || c.adapter == none {
+		return channels
+	}
+	return c.stored_values('channel:').map(json2.decode[discord.Channel](it) or {
+		discord.Channel{}
+	}).filter((it.guild_id or { discord.Snowflake{} }) == guild_id)
 }
 
 pub fn (mut c Cache) user(id discord.Snowflake) ?discord.User {
@@ -90,7 +157,10 @@ pub fn (mut c Cache) user(id discord.Snowflake) ?discord.User {
 	defer {
 		c.mu.runlock()
 	}
-	return c.users[id.value] or { return none }
+	if u := c.users[id.value] {
+		return u
+	}
+	return json2.decode[discord.User](c.stored('user:${id}')?) or { return none }
 }
 
 pub fn (mut c Cache) member(guild_id discord.Snowflake, user_id discord.Snowflake) ?discord.Member {
@@ -98,7 +168,12 @@ pub fn (mut c Cache) member(guild_id discord.Snowflake, user_id discord.Snowflak
 	defer {
 		c.mu.runlock()
 	}
-	return c.members[guild_id.value][user_id.value] or { return none }
+	if m := c.members[guild_id.value][user_id.value] {
+		return m
+	}
+	return json2.decode[discord.Member](c.stored('member:${guild_id}:${user_id}')?) or {
+		return none
+	}
 }
 
 pub fn (mut c Cache) members(guild_id discord.Snowflake) []discord.Member {
@@ -106,7 +181,13 @@ pub fn (mut c Cache) members(guild_id discord.Snowflake) []discord.Member {
 	defer {
 		c.mu.runlock()
 	}
-	return c.members[guild_id.value].values()
+	members := c.members[guild_id.value].values()
+	if members.len > 0 || c.adapter == none {
+		return members
+	}
+	return c.stored_values('member:${guild_id}:').map(json2.decode[discord.Member](it) or {
+		discord.Member{}
+	})
 }
 
 pub fn (mut c Cache) role(guild_id discord.Snowflake, role_id discord.Snowflake) ?discord.Role {
@@ -114,7 +195,10 @@ pub fn (mut c Cache) role(guild_id discord.Snowflake, role_id discord.Snowflake)
 	defer {
 		c.mu.runlock()
 	}
-	return c.roles[guild_id.value][role_id.value] or { return none }
+	if r := c.roles[guild_id.value][role_id.value] {
+		return r
+	}
+	return json2.decode[discord.Role](c.stored('role:${guild_id}:${role_id}')?) or { return none }
 }
 
 pub fn (mut c Cache) roles(guild_id discord.Snowflake) []discord.Role {
@@ -122,7 +206,13 @@ pub fn (mut c Cache) roles(guild_id discord.Snowflake) []discord.Role {
 	defer {
 		c.mu.runlock()
 	}
-	return c.roles[guild_id.value].values()
+	roles := c.roles[guild_id.value].values()
+	if roles.len > 0 || c.adapter == none {
+		return roles
+	}
+	return c.stored_values('role:${guild_id}:').map(json2.decode[discord.Role](it) or {
+		discord.Role{}
+	})
 }
 
 pub fn (mut c Cache) emojis(guild_id discord.Snowflake) []discord.GuildEmoji {
@@ -273,6 +363,7 @@ pub fn (mut c Cache) apply(name string, raw string) {
 			c.mu.lock()
 			c.channels.delete(ch.id.value)
 			c.messages.delete(ch.id.value)
+			c.unpersist('channel:${ch.id}')
 			c.mu.unlock()
 		}
 		'THREAD_LIST_SYNC' {
@@ -295,6 +386,7 @@ pub fn (mut c Cache) apply(name string, raw string) {
 			if e.guild_id.value in c.roles {
 				c.roles[e.guild_id.value].delete(e.role_id.value)
 			}
+			c.unpersist('role:${e.guild_id}:${e.role_id}')
 			c.mu.unlock()
 		}
 		'GUILD_MEMBER_ADD', 'GUILD_MEMBER_UPDATE' {
@@ -313,6 +405,7 @@ pub fn (mut c Cache) apply(name string, raw string) {
 			if e.guild_id.value in c.members {
 				c.members[e.guild_id.value].delete(e.user.id.value)
 			}
+			c.unpersist('member:${e.guild_id}:${e.user.id}')
 			c.count_member(e.guild_id, -1)
 			c.mu.unlock()
 		}
@@ -332,6 +425,7 @@ pub fn (mut c Cache) apply(name string, raw string) {
 			if c.options.emojis {
 				c.mu.lock()
 				c.emojis[e.guild_id.value] = e.emojis
+				c.persist('emojis:${e.guild_id}', json2.encode(e.emojis))
 				c.mu.unlock()
 			}
 		}
@@ -340,6 +434,7 @@ pub fn (mut c Cache) apply(name string, raw string) {
 			if c.options.stickers {
 				c.mu.lock()
 				c.stickers[e.guild_id.value] = e.stickers
+				c.persist('stickers:${e.guild_id}', json2.encode(e.stickers))
 				c.mu.unlock()
 			}
 		}
@@ -365,6 +460,7 @@ pub fn (mut c Cache) apply(name string, raw string) {
 					if s.guild_id.value in c.stage_instances {
 						c.stage_instances[s.guild_id.value].delete(s.id.value)
 					}
+					c.unpersist('stage:${s.guild_id}:${s.id}')
 				} else {
 					c.put_stage_instance(s)
 				}
@@ -380,8 +476,10 @@ pub fn (mut c Cache) apply(name string, raw string) {
 				}
 				if name == 'GUILD_BAN_ADD' {
 					c.bans[e.guild_id.value][e.user.id.value] = true
+					c.persist('ban:${e.guild_id}:${e.user.id}', 'true')
 				} else {
 					c.bans[e.guild_id.value].delete(e.user.id.value)
+					c.unpersist('ban:${e.guild_id}:${e.user.id}')
 				}
 				c.mu.unlock()
 			}
@@ -444,6 +542,7 @@ fn (mut c Cache) put_guild(g discord.Guild) {
 			voice_states:    []
 			stage_instances: []
 		}
+		c.persist('guild:${id}', json2.encode(c.guilds[id] or { discord.Guild{} }))
 	}
 	if g.roles.len > 0 && c.options.roles {
 		c.roles[id] = map[u64]discord.Role{}
@@ -453,9 +552,11 @@ fn (mut c Cache) put_guild(g discord.Guild) {
 	}
 	if g.emojis.len > 0 && c.options.emojis {
 		c.emojis[id] = g.emojis
+		c.persist('emojis:${id}', json2.encode(g.emojis))
 	}
 	if g.stickers.len > 0 && c.options.stickers {
 		c.stickers[id] = g.stickers
+		c.persist('stickers:${id}', json2.encode(g.stickers))
 	}
 	for ch in g.channels {
 		c.put_channel(ch, g.id)
@@ -489,16 +590,24 @@ fn (mut c Cache) remove_guild(id discord.Snowflake, unavailable bool) {
 				...g
 				unavailable: true
 			}
+			c.persist('guild:${id}', json2.encode(c.guilds[id.value] or { discord.Guild{} }))
 		}
 		return
 	}
 	c.guilds.delete(id.value)
+	c.unpersist('guild:${id}')
 	for ch in c.channels.values() {
 		if (ch.guild_id or { discord.Snowflake{} }) == id {
 			c.channels.delete(ch.id.value)
 			c.messages.delete(ch.id.value)
+			c.unpersist('channel:${ch.id}')
 		}
 	}
+	for kind in ['member', 'role', 'presence', 'voice', 'stage', 'ban'] {
+		c.unpersist_prefix('${kind}:${id}:')
+	}
+	c.unpersist('emojis:${id}')
+	c.unpersist('stickers:${id}')
 	c.members.delete(id.value)
 	c.roles.delete(id.value)
 	c.emojis.delete(id.value)
@@ -522,6 +631,7 @@ fn (mut c Cache) put_channel(ch discord.Channel, guild_id ?discord.Snowflake) {
 		} else {
 			ch
 		}
+		c.persist('channel:${ch.id}', json2.encode(c.channels[ch.id.value] or { ch }))
 	}
 }
 
@@ -531,12 +641,14 @@ fn (mut c Cache) put_role(guild_id discord.Snowflake, r discord.Role) {
 			c.roles[guild_id.value] = map[u64]discord.Role{}
 		}
 		c.roles[guild_id.value][r.id.value] = r
+		c.persist('role:${guild_id}:${r.id}', json2.encode(r))
 	}
 }
 
 fn (mut c Cache) put_user(u discord.User) {
 	if c.options.users && u.username != '' {
 		c.users[u.id.value] = u
+		c.persist('user:${u.id}', json2.encode(u))
 	}
 }
 
@@ -551,6 +663,9 @@ fn (mut c Cache) put_member(guild_id discord.Snowflake, m discord.Member) {
 			...m
 			guild_id: guild_id
 		}
+		c.persist('member:${guild_id}:${user.id}', json2.encode(c.members[guild_id.value][user.id.value] or {
+			m
+		}))
 	}
 }
 
@@ -560,6 +675,7 @@ fn (mut c Cache) count_member(guild_id discord.Snowflake, delta int) {
 			...g
 			member_count: g.member_count + delta
 		}
+		c.persist('guild:${guild_id}', json2.encode(c.guilds[guild_id.value] or { g }))
 	}
 }
 
@@ -572,6 +688,9 @@ fn (mut c Cache) put_presence(guild_id discord.Snowflake, p discord.PresenceUpda
 			...p
 			guild_id: guild_id
 		}
+		c.persist('presence:${guild_id}:${p.user.id}', json2.encode(c.presences[guild_id.value][p.user.id.value] or {
+			p
+		}))
 	}
 }
 
@@ -584,11 +703,15 @@ fn (mut c Cache) put_voice_state(guild_id discord.Snowflake, v discord.VoiceStat
 	}
 	if v.channel_id == none {
 		c.voice_states[guild_id.value].delete(v.user_id.value)
+		c.unpersist('voice:${guild_id}:${v.user_id}')
 	} else {
 		c.voice_states[guild_id.value][v.user_id.value] = discord.VoiceState{
 			...v
 			guild_id: guild_id
 		}
+		c.persist('voice:${guild_id}:${v.user_id}', json2.encode(c.voice_states[guild_id.value][v.user_id.value] or {
+			v
+		}))
 	}
 }
 
@@ -598,6 +721,7 @@ fn (mut c Cache) put_stage_instance(s discord.StageInstance) {
 			c.stage_instances[s.guild_id.value] = map[u64]discord.StageInstance{}
 		}
 		c.stage_instances[s.guild_id.value][s.id.value] = s
+		c.persist('stage:${s.guild_id}:${s.id}', json2.encode(s))
 	}
 }
 
@@ -719,6 +843,7 @@ pub fn (mut c Cache) forget_channel(id discord.Snowflake) {
 	c.mu.lock()
 	c.channels.delete(id.value)
 	c.messages.delete(id.value)
+	c.unpersist('channel:${id}')
 	c.mu.unlock()
 }
 
@@ -739,6 +864,7 @@ pub fn (mut c Cache) forget_member(guild_id discord.Snowflake, user_id discord.S
 	if guild_id.value in c.members {
 		c.members[guild_id.value].delete(user_id.value)
 	}
+	c.unpersist('member:${guild_id}:${user_id}')
 	c.mu.unlock()
 }
 
@@ -766,6 +892,7 @@ pub fn (mut c Cache) forget_role(guild_id discord.Snowflake, role_id discord.Sno
 	if guild_id.value in c.roles {
 		c.roles[guild_id.value].delete(role_id.value)
 	}
+	c.unpersist('role:${guild_id}:${role_id}')
 	c.mu.unlock()
 }
 
@@ -788,6 +915,7 @@ pub fn (mut c Cache) store_emojis(guild_id discord.Snowflake, emojis []discord.G
 	}
 	c.mu.lock()
 	c.emojis[guild_id.value] = emojis
+	c.persist('emojis:${guild_id}', json2.encode(emojis))
 	c.mu.unlock()
 }
 
@@ -799,6 +927,7 @@ pub fn (mut c Cache) store_emoji(guild_id discord.Snowflake, e discord.GuildEmoj
 	mut kept := (c.emojis[guild_id.value] or { []discord.GuildEmoji{} }).filter((it.id or { discord.Snowflake{} }) != (e.id or { discord.Snowflake{} }))
 	kept << e
 	c.emojis[guild_id.value] = kept
+	c.persist('emojis:${guild_id}', json2.encode(kept))
 	c.mu.unlock()
 }
 
@@ -806,6 +935,7 @@ pub fn (mut c Cache) forget_emoji(guild_id discord.Snowflake, emoji_id discord.S
 	c.mu.lock()
 	if kept := c.emojis[guild_id.value] {
 		c.emojis[guild_id.value] = kept.filter((it.id or { discord.Snowflake{} }) != emoji_id)
+		c.persist('emojis:${guild_id}', json2.encode(c.emojis[guild_id.value] or { kept }))
 	}
 	c.mu.unlock()
 }
@@ -820,8 +950,10 @@ pub fn (mut c Cache) store_ban(guild_id discord.Snowflake, user_id discord.Snowf
 	}
 	if banned {
 		c.bans[guild_id.value][user_id.value] = true
+		c.persist('ban:${guild_id}:${user_id}', 'true')
 	} else {
 		c.bans[guild_id.value].delete(user_id.value)
+		c.unpersist('ban:${guild_id}:${user_id}')
 	}
 	c.mu.unlock()
 }
@@ -847,6 +979,7 @@ pub fn (mut c Cache) store_sticker(guild_id discord.Snowflake, s discord.Sticker
 	mut kept := (c.stickers[guild_id.value] or { []discord.Sticker{} }).filter(it.id != s.id)
 	kept << s
 	c.stickers[guild_id.value] = kept
+	c.persist('stickers:${guild_id}', json2.encode(kept))
 	c.mu.unlock()
 }
 
@@ -854,6 +987,7 @@ pub fn (mut c Cache) forget_sticker(guild_id discord.Snowflake, sticker_id disco
 	c.mu.lock()
 	if kept := c.stickers[guild_id.value] {
 		c.stickers[guild_id.value] = kept.filter(it.id != sticker_id)
+		c.persist('stickers:${guild_id}', json2.encode(c.stickers[guild_id.value] or { kept }))
 	}
 	c.mu.unlock()
 }
@@ -889,6 +1023,7 @@ pub fn (mut c Cache) forget_stage_instance(guild_id discord.Snowflake, channel_i
 		for id, s in c.stage_instances[guild_id.value] {
 			if s.channel_id == channel_id {
 				c.stage_instances[guild_id.value].delete(id)
+				c.unpersist('stage:${guild_id}:${id}')
 				break
 			}
 		}

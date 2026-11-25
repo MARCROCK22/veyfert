@@ -325,8 +325,9 @@ defaults to 8 MiB, is exposed as an option.
 - A typed, unserialized in-memory cache: one map per resource behind a `sync.RwMutex`, with the last
   messages of each channel. It is intent-aware, each resource can be turned off, and member counts
   are tracked.
-- External adapters (Redis…) only when someone asks for them: an interface over serialized JSON and
-  Seyfert's conformance suite ported to `v test`.
+- External adapters (Redis…) as a second level (phase 8): an interface over serialized JSON, which
+  the cache writes every resource to and reads from when its memory lacks it, and Seyfert's
+  conformance suite as `cache.check_adapter`.
 - Shorters are cache-first over the REST endpoints. The original idea was to give structures that
   arrive through events and contexts a client linked in a `@[skip]` field, filled by a comptime walk,
   for `msg.reply(...)` and `member.ban(...)`. That was dropped: see the phase 5 decision.
@@ -712,9 +713,13 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
     - [x] Helpers on the models: `mention()`, `url()`, `display_name()`, `tag()`,
       `Snowflake.created_at()`, `discord.colors` (Seyfert's embed colors), `parse_color` and
       `rgb`, and `parse_emoji` with `Emoji.reaction()` for the reaction shorters.
-  - Cache:
-    - [ ] An adapter interface, the in-memory adapter, a limited one (a limit and an expiry per
-      resource) and a conformance suite for adapters.
+  - Cache (done, tested in `cache/adapter_test.v`):
+    - [x] An adapter interface, the in-memory adapter, a limited one (a limit and an expiry per
+      resource) and a conformance suite for adapters: `cache.Adapter` (get, set, remove, scan by
+      prefix, flush), `MemoryAdapter`, `LimitedMemoryAdapter` and `check_adapter`. The typed
+      in-memory cache stays the first level, so reads cost no decoding; `Options.adapter` (with
+      `cache.new`) adds a second level that gets every write and answers what memory lacks,
+      such as what another process wrote to a shared Redis. Messages stay in memory only.
   - Plugins:
     - [ ] Requirements (semver) and imports between plugins, ordering, a typed shared registry
       with disposal, lifecycle hooks (before commands load, plugins ready, client close),
@@ -763,7 +768,8 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
   plan.
 - Several threads by default, with `workers: 1` as an option.
 - No `WorkerManager`: to use several processes, shard ranges.
-- No external cache adapters and no full plugin system until a real case asks for them.
+- Cache adapters and the full plugin system were left for when a real case asked for them; phase 8
+  (Seyfert parity) adds them.
 - Voice: only the gateway side (joining and leaving); audio is out of scope.
 - No deadlines: each phase ends when it passes its exit criterion.
 

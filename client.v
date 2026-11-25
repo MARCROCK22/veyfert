@@ -114,9 +114,7 @@ pub fn new_client(opts ClientOptions) &Client {
 			user_agent: 'DiscordBot (https://github.com/veyfert, ${manifest.version})'
 		}
 		logger:               logger
-		cache:                &cache.Cache{
-			options: opts.cache
-		}
+		cache:                cache.new(opts.cache)
 		intents:              opts.intents
 		compress:             opts.compress && !opts.zstd
 		zstd:                 opts.zstd
