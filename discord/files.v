@@ -13,6 +13,30 @@ pub:
 	content_type string = 'application/octet-stream'
 }
 
+// file_from_base64 makes a file from base64 data, plain or as a data URI
+// (`data:image/png;base64,…`), whose type then wins over `content_type`.
+pub fn file_from_base64(name string, data string, content_type string) !File {
+	mut kind := content_type
+	mut payload := data.trim_space()
+	if payload.starts_with('data:') {
+		header := payload.all_before(',')
+		if !header.ends_with(';base64') {
+			return error('veyfert: the data URI is not base64')
+		}
+		kind = header.all_after('data:').all_before(';')
+		payload = payload.all_after(',')
+	}
+	bytes := base64.decode(payload)
+	if bytes.len == 0 && payload != '' {
+		return error('veyfert: the data is not base64')
+	}
+	return File{
+		name:         name
+		data:         bytes
+		content_type: if kind == '' { 'application/octet-stream' } else { kind }
+	}
+}
+
 // data_uri is the file as Discord takes images and sounds in JSON bodies: `data:<type>;base64,…`.
 pub fn (f File) data_uri() string {
 	return 'data:${f.content_type};base64,${base64.encode(f.data)}'

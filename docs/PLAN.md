@@ -690,11 +690,16 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
       `check_options(mut ctx) !` method runs after the options are filled; its error goes to
       on_options_error, and it may set other fields. V has no callback per field.
     - [x] A replaceable argument parser for prefix commands: `c.commands.args_parser`.
-  - Components and modals:
-    - [ ] custom_id matched by a regular expression, and a `filter` method on handlers.
-    - [ ] Collectors for several components or events, with `timeout`, `idle`, `max` and the
-      reason they stopped.
-    - [ ] Attachments from base64.
+  - Components and modals (done, tested in `components_parity_test.v`):
+    - [x] custom_id matched by a regular expression, `@[CustomIdRegex]`, for components and modal
+      submissions (exact IDs win, then prefixes, then expressions), a `filter` method on
+      handlers that passes the interaction to the next match, and `ctx.modal(form, custom_id:)`
+      to open a modal with an ID that carries data.
+    - [x] Collectors for several components or events, with `timeout`, `idle`, `max` and the
+      reason they stopped: `c.collect[T](filter, each)` and `ctx.collect_components(each)`. They
+      block, like `wait_for`; `each` returns `stop()` to end them, and collected clicks skip
+      the handlers.
+    - [x] Attachments from base64: `discord.file_from_base64`, plain or as a data URI.
   - Utilities:
     - [ ] A formatter: markdown, mentions (users, channels, roles, slash commands), timestamps and
       their styles, headings, links, code blocks, lists and OAuth2 URLs.

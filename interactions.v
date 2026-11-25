@@ -1,6 +1,7 @@
 module veyfert
 
 import json2
+import regex
 import time
 import veyfert.discord
 
@@ -18,6 +19,31 @@ pub:
 pub struct CustomIdPrefix {
 pub:
 	prefix string
+}
+
+// CustomIdRegex routes the components, or modal submissions, whose custom_id matches a regular
+// expression (V's `regex` syntax; it searches the ID, unless ^ or $ anchor it). Exact IDs win,
+// then prefixes, then expressions in the order they were added; a handler's `filter` method may
+// still pass on one, and the next one is tried.
+@[attribute]
+pub struct CustomIdRegex {
+pub:
+	pattern string
+}
+
+// regex_finds tells whether `pattern` matches somewhere in `text`.
+// ponytail: compiles on every call, since a compiled regex.RE keeps state while it matches and
+// handlers run on several threads; keep one per thread if this shows up in a profile.
+fn regex_finds(pattern string, text string) bool {
+	mut re := regex.regex_opt(pattern) or { return false }
+	start, _ := re.find(text)
+	return start >= 0
+}
+
+fn check_regex(pattern string, owner string) {
+	regex.regex_opt(pattern) or {
+		panic('veyfert: the @[CustomIdRegex] of ${owner} is not a valid expression: ${err}')
+	}
 }
 
 // Modal declares a modal: the fields with @[Label] are its inputs, and `submit` runs with them
@@ -112,15 +138,27 @@ mut:
 
 // modal opens the modal that `form`'s type declares; fields with a value prefill their inputs.
 // A modal must be the first answer to an interaction.
-pub fn (mut ctx InteractionContext) modal[T](form T) ! {
+pub fn (mut ctx InteractionContext) modal[T](form T, opts OpenModal) ! {
 	if ctx.message != none {
 		return error('veyfert: a prefix command cannot answer with this; it has no interaction')
 	}
 	if ctx.replied {
 		return error('veyfert: a modal must be the first answer to an interaction')
 	}
-	ctx.callback(9, modal_json(form), [])!
+	mut json := modal_json(form)
+	if id := opts.custom_id {
+		json.custom_id = id
+	}
+	ctx.callback(9, json, [])!
 	ctx.replied = true
+}
+
+@[params]
+pub struct OpenModal {
+pub:
+	// custom_id opens the modal with another ID, such as 'ban:123'; route its submissions with
+	// @[CustomIdRegex] on the modal type.
+	custom_id ?string
 }
 
 @[params]
@@ -155,6 +193,59 @@ pub fn (mut ctx InteractionContext) wait_for_component(opts WaitComponent) ?&Com
 	}
 }
 
+@[params]
+pub struct CollectComponents {
+pub:
+	timeout    time.Duration = time.minute // ends the collection this long after it starts; 0 never
+	idle       time.Duration      // ends it after this long without a click; 0 never
+	max        int                // ends it after this many clicks; 0 has no limit
+	message_id ?discord.Snowflake // the message with the components; by default, this interaction's answer
+	custom_id  ?string            // only this component
+	anyone     bool               // accept any user, not only the author of this interaction
+}
+
+// collect_components runs `each` for every click or pick on a message's components, one at a
+// time, until the collection ends, and returns why; those interactions skip the component
+// handlers. `each` may return `veyfert.stop()` to end it.
+pub fn (mut ctx InteractionContext) collect_components(each fn (mut c ComponentContext) !, opts CollectComponents) CollectStop {
+	message_id := opts.message_id or {
+		(ctx.fetch_response() or { return .timeout }).id
+	}
+	user_id := ctx.author().id
+	custom_id := opts.custom_id or { '' }
+	anyone := opts.anyone
+	ch := chan discord.Interaction{cap: 64}
+	id := ctx.client.add_collector('INTERACTION_CREATE', Collector(InteractionWait{
+		filter: fn [message_id, user_id, custom_id, anyone] (i discord.Interaction) bool {
+			message := i.message or { return false }
+			data := i.data or { return false }
+			return i.kind == 3 && message.id == message_id
+				&& (anyone || interaction_user(i).id == user_id)
+				&& (custom_id == '' || data.custom_id or { '' } == custom_id)
+		}
+		ch:     ch
+		many:   true
+	}))
+	defer {
+		ctx.client.remove_collector('INTERACTION_CREATE', id)
+	}
+	client := ctx.client
+	return drain(ch, Collect{
+		timeout: opts.timeout
+		idle:    opts.idle
+		max:     opts.max
+	}, fn [each, client] (i discord.Interaction) ! {
+		data := i.data or { discord.InteractionData{} }
+		mut cctx := &ComponentContext{
+			interaction: i
+			client:      client
+			custom_id:   data.custom_id or { '' }
+			values:      data.values
+		}
+		each(mut cctx)!
+	}, ctx.client.logger)
+}
+
 // wait_for_modal opens `form`'s modal and waits for the author to send it. It returns the form
 // filled and the context to answer the submission; none after `timeout`. That submission skips
 // the modal handlers.
@@ -187,6 +278,7 @@ fn interaction_user(i discord.Interaction) discord.User {
 }
 
 interface ComponentInvoker {
+	passes(mut ctx ComponentContext) bool
 	invoke(mut ctx ComponentContext)
 }
 
@@ -213,8 +305,23 @@ fn (b ComponentBound[T]) invoke(mut ctx ComponentContext) {
 	}
 }
 
+// passes calls the handler's `filter(mut ctx) bool` when it has one.
+fn (b ComponentBound[T]) passes(mut ctx ComponentContext) bool {
+	$for m in T.methods {
+		$if m.name == 'filter' {
+			return b.proto.filter(mut ctx)
+		}
+	}
+	return true
+}
+
 struct PrefixRoute {
 	prefix  string
+	invoker ComponentInvoker
+}
+
+struct RegexRoute {
+	pattern string
 	invoker ComponentInvoker
 }
 
@@ -223,6 +330,7 @@ pub struct Components {
 mut:
 	exact    map[string]ComponentInvoker
 	prefixes []PrefixRoute // longest first
+	regexes  []RegexRoute  // in the order they were added
 	guards   []HandlerGuardFn
 }
 
@@ -246,31 +354,57 @@ pub fn (mut r Components) add[T](proto T) {
 			r.prefixes << PrefixRoute{a.prefix, ComponentInvoker(ComponentBound[T]{proto})}
 			r.prefixes.sort(a.prefix.len > b.prefix.len)
 			routed = true
+		} $else $if a is CustomIdRegex {
+			check_regex(a.pattern, T.name)
+			r.regexes << RegexRoute{a.pattern, ComponentInvoker(ComponentBound[T]{proto})}
+			routed = true
 		}
 	}
 	if !routed {
-		panic('veyfert: ${T.name} needs @[veyfert.CustomId(...)] or @[veyfert.CustomIdPrefix(...)]')
+		panic('veyfert: ${T.name} needs @[veyfert.CustomId(...)], @[veyfert.CustomIdPrefix(...)] or @[veyfert.CustomIdRegex(...)]')
 	}
 }
 
-fn (r &Components) find(custom_id string) ?ComponentInvoker {
+// candidates are the handlers whose route matches, in the order they are tried.
+fn (r &Components) candidates(custom_id string) []ComponentInvoker {
+	mut out := []ComponentInvoker{}
 	if invoker := r.exact[custom_id] {
-		return invoker
+		out << invoker
 	}
 	for route in r.prefixes {
 		if custom_id.starts_with(route.prefix) {
-			return route.invoker
+			out << route.invoker
 		}
 	}
-	return none
+	for route in r.regexes {
+		if regex_finds(route.pattern, custom_id) {
+			out << route.invoker
+		}
+	}
+	return out
 }
 
 interface ModalInvoker {
+	passes(mut ctx ModalContext) bool
 	invoke(mut ctx ModalContext, values map[string][]string)
 }
 
 struct ModalBound[T] {
 	proto T
+}
+
+fn (b ModalBound[T]) passes(mut ctx ModalContext) bool {
+	$for m in T.methods {
+		$if m.name == 'filter' {
+			return b.proto.filter(mut ctx)
+		}
+	}
+	return true
+}
+
+struct ModalRegexRoute {
+	pattern string
+	invoker ModalInvoker
 }
 
 // invoke fills a modal's fields, then runs on_before_guards, the global handler guards, its own
@@ -299,8 +433,9 @@ fn (b ModalBound[T]) invoke(mut ctx ModalContext, values map[string][]string) {
 // Modals routes modal submissions to the types that declare them.
 pub struct Modals {
 mut:
-	by_id  map[string]ModalInvoker
-	guards []HandlerGuardFn
+	by_id   map[string]ModalInvoker
+	regexes []ModalRegexRoute
+	guards  []HandlerGuardFn
 }
 
 // use adds a guard that runs before every modal's `submit`, ahead of its own guards.
@@ -314,6 +449,25 @@ pub fn (mut r Modals) add[T](proto T) {
 		panic('veyfert: the modal ${T.name} needs a `submit` method')
 	}
 	r.by_id[modal_json(proto).custom_id] = ModalInvoker(ModalBound[T]{proto})
+	$for a in T.attributes {
+		$if a is CustomIdRegex {
+			check_regex(a.pattern, T.name)
+			r.regexes << ModalRegexRoute{a.pattern, ModalInvoker(ModalBound[T]{proto})}
+		}
+	}
+}
+
+fn (r &Modals) candidates(custom_id string) []ModalInvoker {
+	mut out := []ModalInvoker{}
+	if invoker := r.by_id[custom_id] {
+		out << invoker
+	}
+	for route in r.regexes {
+		if regex_finds(route.pattern, custom_id) {
+			out << route.invoker
+		}
+	}
+	return out
 }
 
 // handler_guards runs on_before_guards, the global guards and the handler's own guards; false
@@ -412,10 +566,6 @@ fn handler_internal_error[T, C](handler T, mut ctx C, hook string, failure IErro
 fn (mut c Client) run_component(i discord.Interaction, inline &InlineReply) {
 	data := i.data or { return }
 	custom_id := data.custom_id or { '' }
-	invoker := c.components.find(custom_id) or {
-		c.logger.warn('no handler for the component `${custom_id}`')
-		return
-	}
 	mut ctx := &ComponentContext{
 		interaction: i
 		client:      c
@@ -423,23 +573,31 @@ fn (mut c Client) run_component(i discord.Interaction, inline &InlineReply) {
 		custom_id:   custom_id
 		values:      data.values
 	}
-	invoker.invoke(mut ctx)
+	for invoker in c.components.candidates(custom_id) {
+		if invoker.passes(mut ctx) {
+			invoker.invoke(mut ctx)
+			return
+		}
+	}
+	c.logger.warn('no handler for the component `${custom_id}`')
 }
 
 fn (mut c Client) run_modal(i discord.Interaction, inline &InlineReply) {
 	data := i.data or { return }
 	custom_id := data.custom_id or { '' }
-	invoker := c.modals.by_id[custom_id] or {
-		c.logger.warn('no handler for the modal `${custom_id}`')
-		return
-	}
 	mut ctx := &ModalContext{
 		interaction: i
 		client:      c
 		inline:      inline
 		custom_id:   custom_id
 	}
-	invoker.invoke(mut ctx, modal_values(data.components or { discord.RawJson{} }))
+	for invoker in c.modals.candidates(custom_id) {
+		if invoker.passes(mut ctx) {
+			invoker.invoke(mut ctx, modal_values(data.components or { discord.RawJson{} }))
+			return
+		}
+	}
+	c.logger.warn('no handler for the modal `${custom_id}`')
 }
 
 // modal_json builds a modal from the fields of T that have @[Label], in their order.

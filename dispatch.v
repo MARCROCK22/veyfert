@@ -1,6 +1,7 @@
 module veyfert
 
 import json2
+import log
 import sync
 import time
 import veyfert.discord
@@ -28,8 +29,16 @@ fn (l TypedListener[T]) call(raw string, mut c Client) ! {
 
 // A collector sees an event on the shard's reader thread, before the handler pool, and returns
 // true once it is done with it, which removes it. It runs under the client's lock.
+// Consumed is what a collector did with an event. An interaction that a collector took is not
+// handled again.
+enum Consumed {
+	ignored // not for this collector
+	taken   // taken, and the collector wants more
+	done    // taken, and the collector is finished
+}
+
 interface Collector {
-	consume(raw string, mut c Client) bool
+	consume(raw string, mut c Client) Consumed
 }
 
 struct WaitCollector[T] {
@@ -37,22 +46,37 @@ struct WaitCollector[T] {
 	ch     chan T
 }
 
-fn (w WaitCollector[T]) consume(raw string, mut _ Client) bool {
-	value := json2.decode[T](raw) or { return false }
+fn (w WaitCollector[T]) consume(raw string, mut _ Client) Consumed {
+	value := json2.decode[T](raw) or { return .ignored }
 	if !w.filter(value) {
-		return false
+		return .ignored
 	}
-	return w.ch.try_push(value) == .success
+	return if w.ch.try_push(value) == .success { .done } else { .ignored }
+}
+
+// StreamCollector hands every matching event to a collection, until it is removed.
+struct StreamCollector[T] {
+	filter fn (T) bool @[required]
+	ch     chan T
+}
+
+fn (s StreamCollector[T]) consume(raw string, mut _ Client) Consumed {
+	value := json2.decode[T](raw) or { return .ignored }
+	if !s.filter(value) {
+		return .ignored
+	}
+	// A full buffer leaves the event to the listeners.
+	return if s.ch.try_push(value) == .success { .taken } else { .ignored }
 }
 
 struct OnceCollector[T] {
 	f fn (T, mut Client) ! @[required]
 }
 
-fn (o OnceCollector[T]) consume(raw string, mut c Client) bool {
-	value := json2.decode[T](raw) or { return false }
+fn (o OnceCollector[T]) consume(raw string, mut c Client) Consumed {
+	value := json2.decode[T](raw) or { return .ignored }
 	spawn run_listener(o.f, value, mut c)
-	return true
+	return .done
 }
 
 fn run_listener[T](f fn (T, mut Client) !, value T, mut c Client) {
@@ -135,11 +159,83 @@ fn (mut c Client) wait_interaction(filter fn (discord.Interaction) bool, timeout
 struct InteractionWait {
 	filter fn (discord.Interaction) bool @[required]
 	ch     chan discord.Interaction
+	many   bool // a collection, which stays until it is removed
 }
 
-fn (w InteractionWait) consume(raw string, mut _ Client) bool {
-	value := json2.decode[discord.Interaction](raw) or { return false }
-	return w.filter(value) && w.ch.try_push(value) == .success
+fn (w InteractionWait) consume(raw string, mut _ Client) Consumed {
+	value := json2.decode[discord.Interaction](raw) or { return .ignored }
+	if w.filter(value) && w.ch.try_push(value) == .success {
+		return if w.many { .taken } else { .done }
+	}
+	return .ignored
+}
+
+@[params]
+pub struct Collect {
+pub:
+	timeout time.Duration = time.minute // ends the collection this long after it starts; 0 never
+	idle    time.Duration // ends it after this long without an item; 0 never
+	max     int           // ends it after this many items; 0 has no limit
+}
+
+// CollectStop is why a collection ended.
+pub enum CollectStop {
+	timeout
+	idle
+	max
+	stopped // the callback returned veyfert.stop()
+}
+
+// collect runs `each` for every event of type T that passes `filter`, one at a time, until the
+// collection ends, and returns why: Seyfert's collectors, blocking like `wait_for`. `each` may
+// return `veyfert.stop()` to end it; other errors are logged.
+pub fn (mut c Client) collect[T](filter fn (T) bool, each fn (T, mut Client) !, opts Collect) CollectStop {
+	ch := chan T{cap: 64}
+	name := event_name[T]()
+	id := c.add_collector(name, Collector(StreamCollector[T]{
+		filter: filter
+		ch:     ch
+	}))
+	defer {
+		c.remove_collector(name, id)
+	}
+	return drain(ch, opts, fn [each, mut c] [T](value T) ! {
+		each(value, mut c)!
+	}, c.logger)
+}
+
+// drain hands what arrives on `ch` to `each` until `opts` ends the collection.
+// ponytail: polls every 10 ms, as recv_until does (PLAN.md, risk 14).
+fn drain[T](ch chan T, opts Collect, each fn (T) !, logger &log.ThreadSafeLog) CollectStop {
+	started := time.now()
+	mut last := started
+	mut count := 0
+	for {
+		now := time.now()
+		if opts.timeout > 0 && now - started >= opts.timeout {
+			return .timeout
+		}
+		if opts.idle > 0 && now - last >= opts.idle {
+			return .idle
+		}
+		mut value := T{}
+		if ch.try_pop(mut value) != .success {
+			time.sleep(10 * time.millisecond)
+			continue
+		}
+		last = time.now()
+		count++
+		each(value) or {
+			if err is GuardStop {
+				return .stopped
+			}
+			logger.error('collector: ${err}')
+		}
+		if opts.max > 0 && count >= opts.max {
+			return .max
+		}
+	}
+	return .timeout
 }
 
 // recv_until pops a value from `ch`, or returns none once `timeout` has passed.
@@ -193,15 +289,23 @@ fn (mut c Client) run_collectors(name string, raw string) bool {
 		return false
 	}
 	mut done := []int{}
+	mut taken := false
 	for id, col in c.collectors[name] {
-		if col.consume(raw, mut c) {
-			done << id
+		match col.consume(raw, mut c) {
+			.ignored {}
+			.taken {
+				taken = true
+			}
+			.done {
+				taken = true
+				done << id
+			}
 		}
 	}
 	for id in done {
 		c.collectors[name].delete(id)
 	}
-	return done.len > 0
+	return taken
 }
 
 // dispatch runs on a shard's reader thread: collectors first, then the event goes to the
