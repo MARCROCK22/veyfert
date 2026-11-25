@@ -24,6 +24,11 @@ details.
   that only the library calls, and `time.now()` in `net.http.Server`'s `DebugHandler`. A minimal
   program does not show it, so it is not reported yet. veyfert avoids both: the library does not
   call its own event generics, and `veyfert.server` has its own small HTTP/1.1 server.
+- A function type declares an enum backed by `u64` as C `int`
+  ([vlang/v#32915](https://github.com/vlang/v/issues/32915)), so a `discord.Permissions` with
+  permissions past bit 31, such as `moderate_members`, arrives as 0 through a callback or a
+  closure. veyfert calls its permission hooks through a function type that takes `u64`; in your
+  own callbacks, pass `u64(perms)` and convert it back.
 - In a struct literal, a pointer is not turned into an optional interface field:
   `cache.Options{adapter: store}` fails, and `adapter: cache.Adapter(store)` works.
 

@@ -760,7 +760,7 @@ fn hook_bot_permissions[T](cmd T, mut ctx CommandContext, missing discord.Permis
 			return
 		}
 	}
-	ctx.client.commands.defaults.on_bot_permissions_fail(mut ctx, missing) or {
+	call_permissions_hook(ctx.client.commands.defaults.on_bot_permissions_fail, mut ctx, missing) or {
 		internal_error(cmd, mut ctx, 'on_bot_permissions_fail', err)
 	}
 }
@@ -776,9 +776,20 @@ fn hook_permissions_fail[T](cmd T, mut ctx CommandContext, missing discord.Permi
 			return
 		}
 	}
-	ctx.client.commands.defaults.on_permissions_fail(mut ctx, missing) or {
+	call_permissions_hook(ctx.client.commands.defaults.on_permissions_fail, mut ctx, missing) or {
 		internal_error(cmd, mut ctx, 'on_permissions_fail', err)
 	}
+}
+
+// RawPermissionsHook is how the default permission hooks are called. V declares a 64-bit enum
+// as `int` in function types (vlang/v#32915), which drops the permissions past bit 31, such as
+// moderate_members; a `u64` parameter passes all of them to the hook, whose own definition
+// takes a discord.Permissions.
+type RawPermissionsHook = fn (mut ctx CommandContext, missing u64) !
+
+fn call_permissions_hook(hook fn (mut ctx CommandContext, missing discord.Permissions) !, mut ctx CommandContext, missing discord.Permissions) ! {
+	raw := unsafe { RawPermissionsHook(voidptr(hook)) }
+	raw(mut ctx, u64(missing))!
 }
 
 // hook_before calls on_before_options or on_before_guards when the command has it. An error

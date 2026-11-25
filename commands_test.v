@@ -357,6 +357,29 @@ fn test_missing_bot_permissions_stop_the_command() {
 	assert reply(rec) == 'banned'
 }
 
+// moderate_members is bit 40, past what V passes as `int` through a function type
+// (vlang/v#32915).
+@[BotPerms('moderate_members')]
+@[Declare(name: 'silence', description: 'Needs to time out')]
+struct Silence {}
+
+fn (s Silence) run(mut ctx CommandContext) ! {
+	ctx.write(content: 'silenced')!
+}
+
+fn test_the_default_permission_hooks_get_permissions_past_bit_31() {
+	mut c, rec := recording_client()
+	c.commands.add(Silence{})
+	data := '{"id":"1","name":"silence","type":1}'
+	c.handle_interaction(interaction(2, data, '0'))
+	assert reply(rec) == 'I need these permissions here: moderate_members.'
+	c.commands.defaults.on_bot_permissions_fail = fn (mut ctx CommandContext, missing discord.Permissions) ! {
+		ctx.write(content: '${u64(missing)}')!
+	}
+	c.handle_interaction(interaction(2, data, '0'))
+	assert reply(rec) == u64(discord.Permissions.moderate_members).str()
+}
+
 fn test_global_guards_run_before_every_command() {
 	mut c, rec := recording_client()
 	log := &Log{}

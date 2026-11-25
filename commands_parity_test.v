@@ -193,6 +193,23 @@ fn test_prefix_commands_check_the_authors_permissions_and_slash_commands_leave_i
 	assert answer(rec) == 'no manage_messages'
 }
 
+@[Declare(name: 'mute', description: 'Needs to time out')]
+@[Perms('moderate_members')]
+struct Mute {}
+
+fn (m Mute) run(mut ctx CommandContext) ! {
+	ctx.write(content: 'muted')!
+}
+
+// moderate_members is bit 40, past what V passes as `int` through a function type
+// (vlang/v#32915).
+fn test_the_permissions_hook_names_permissions_past_bit_31() {
+	mut c, rec := recording_client()
+	c.commands.add(Mute{})
+	c.run_prefix(said('!mute', ''))
+	assert answer(rec) == 'You need these permissions here: moderate_members.'
+}
+
 @[Declare(name: 'pair', description: 'Two options')]
 struct Pair {
 mut:
