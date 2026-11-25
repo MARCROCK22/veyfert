@@ -53,9 +53,19 @@ pub mut:
 	webhooks   WebhookShorter
 	bans       BanShorter
 	emojis     EmojiShorter
-	cache      &cache.Cache
-	rest       rest.Rest
-	logger     &log.ThreadSafeLog
+	// application, monetization and interactions ask Discord for the application ID once when
+	// the gateway has not given it.
+	application  ApplicationShorter
+	monetization MonetizationShorter
+	interactions InteractionShorter
+	invites      InviteShorter
+	soundboard   SoundboardShorter
+	stages       StageShorter
+	templates    TemplateShorter
+	voice_states VoiceStateShorter
+	cache        &cache.Cache
+	rest         rest.Rest
+	logger       &log.ThreadSafeLog
 mut:
 	intents              discord.Intents
 	compress             bool
@@ -83,6 +93,7 @@ mut:
 	ready_shards   map[int]bool
 	bot_ready_sent bool
 	user           discord.User
+	app_id         discord.Snowflake
 	// The handler pool.
 	plugins           []Plugin
 	interceptors      []fn (name string, raw string) ?string
@@ -142,7 +153,54 @@ pub fn new_client(opts ClientOptions) &Client {
 	c.webhooks.client = c
 	c.bans.client = c
 	c.emojis.client = c
+	c.application.client = c
+	c.monetization.client = c
+	c.interactions.client = c
+	c.invites.client = c
+	c.soundboard.client = c
+	c.stages.client = c
+	c.templates.client = c
+	c.voice_states.client = c
+	c.guilds.audit.client = c
+	c.guilds.onboarding.client = c
+	c.guilds.welcome.client = c
+	c.guilds.widget.client = c
+	c.guilds.moderation.client = c
+	c.guilds.events.client = c
+	c.guilds.stickers.client = c
 	return c
+}
+
+// bot_id is the bot's user ID: the one READY gave, or asked to Discord once.
+pub fn (mut c Client) bot_id() !discord.Snowflake {
+	c.mu.lock()
+	id := c.user.id
+	c.mu.unlock()
+	if id.value != 0 {
+		return id
+	}
+	me := json2.decode[discord.User](c.rest.request(.get, '/users/@me')!)!
+	c.mu.lock()
+	if c.user.id.value == 0 {
+		c.user = me
+	}
+	c.mu.unlock()
+	return me.id
+}
+
+// application_id is the bot's application ID: the one READY gave, or asked to Discord once.
+pub fn (mut c Client) application_id() !discord.Snowflake {
+	c.mu.lock()
+	id := c.app_id
+	c.mu.unlock()
+	if id.value != 0 {
+		return id
+	}
+	app := json2.decode[discord.Application](c.rest.request(.get, '/applications/@me')!)!
+	c.mu.lock()
+	c.app_id = app.id
+	c.mu.unlock()
+	return app.id
 }
 
 fn (mut c Client) handle_interaction(raw string) {

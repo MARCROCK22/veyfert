@@ -413,6 +413,7 @@ veyfert/
 | 5 | Cache, structures and shorters | Consistency tests with event sequences and a clean `-race` on Linux |
 | 6 | Prefix, i18n, plugins and HTTP | An HTTP test with requests signed by a key generated in the test itself |
 | 7 | Production and publishing | Public `veyfert.testing`, docs, examples and benchmarks; CI on the three systems and published on VPM |
+| 8 | Seyfert parity | Every item of the phase 8 checklist is done, tested and green in CI |
 
 Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gateway and REST.
 
@@ -614,6 +615,95 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
   against Seyfert (RAM per guild and events per second).
 - CI on Linux, macOS and Windows, publishing on VPM and a deprecation policy with `@[deprecated]` and
   `@[deprecated_after]`.
+
+**Phase 8 — Seyfert parity.**
+- Asked on 2026-11-24: write all the code that veyfert still lacks compared with Seyfert. The
+  inventory compares Seyfert 6.0.0's runtime exports (541) and its 19 shorters (202 methods,
+  counting overloads and `raw` twins) with veyfert. Here `fetch` and `raw` are one method, since
+  there are no structure classes, and an operation that another shorter already has is not
+  repeated: Seyfert's `channels.pins` is `c.messages.pins`.
+- Not ported, by design (§1.4): workers and the worker cache adapter, `Transformers` and structure
+  classes, loading from files, reload and `seyfert.config`, the proxy router, `Collection`, terminal
+  colors and the mixer.
+- Checklist; each item is ticked when it is done and tested:
+  - Shorters, 127 new methods, done: `shorters_guild.v` and `shorters_app.v`, tested in
+    `shorters_parity_test.v`. Seyfert's `messages.purge` is `c.messages.delete_bulk`, and its
+    `guilds.channels.edit_positions` and `add_follower` are on `c.channels`:
+    - [x] `c.application` (new, 14): emojis (list, fetch, create, edit, delete), entitlements
+      (list, fetch, consume, create_test, delete_test), skus, fetch, edit, activity_instance.
+    - [x] `c.monetization` (new, 4): list_skus, fetch_sku, subscriptions, fetch_subscription.
+    - [x] `c.interactions` (new, 8): reply, fetch_response, fetch_original, edit_message,
+      edit_original, delete_response, delete_original, followup.
+    - [x] `c.invites` (new, 12): fetch, delete, create, list_channel, list_guild, and the target
+      users of an invite (fetch, update, job_status, add, remove, bulk_add, bulk_remove).
+    - [x] `c.soundboard` (new, 7): defaults, send, list, fetch, create, edit, delete.
+    - [x] `c.stages` (new, 4): fetch, create, edit, delete.
+    - [x] `c.templates` (new, 6): fetch, list, create, sync, edit, delete.
+    - [x] `c.voice_states` (new, 2): request_speak, set_suppress.
+    - [x] `c.guilds` (30): edit, fetch_self, widget_url, incidents, search_messages;
+      `audit.fetch`; `onboarding` fetch and edit; `welcome` fetch and edit; `widget` settings,
+      edit, fetch and image; `moderation` (auto
+      moderation rules) list, create, fetch, edit and delete; `events` (scheduled events) list,
+      create, fetch, edit, delete and subscribers; `stickers` list, create, fetch, edit and delete.
+    - [x] `c.channels` (8): edit_positions, add_follower, member_permissions, role_permissions,
+      overwrites_for, fetch_member_permissions, fetch_role_permissions, set_voice_status.
+    - [x] `c.members` (9): resolve, add, roles, sort_roles, permissions, fetch_permissions,
+      presence, voice, has_timeout.
+    - [x] `c.messages` (2): end_poll, answer_voters.
+    - [x] `c.roles` (3): member_counts, fetch_permissions, edit_positions.
+    - [x] `c.threads` (6): lock, edit, fetch_member, list_members, list_archived,
+      list_joined_archived_private.
+    - [x] `c.bans` (3): create, remove, bulk_create.
+    - [x] `c.emojis` (2): fetch, edit.
+    - [x] `c.users` (1): delete_dm.
+    - [x] `c.webhooks` (6): edit, fetch, fetch_message, edit_message, delete_message, list_guild.
+  - Events:
+    - [ ] Typed payloads for the 42 gateway events that only reach RAW listeners today:
+      APPLICATION_COMMAND_PERMISSIONS_UPDATE; AUTO_MODERATION_RULE_CREATE, _UPDATE, _DELETE and
+      AUTO_MODERATION_ACTION_EXECUTION; CHANNEL_PINS_UPDATE and CHANNEL_INFO; ENTITLEMENT_CREATE,
+      _UPDATE and _DELETE; GUILD_AUDIT_LOG_ENTRY_CREATE; GUILD_INTEGRATIONS_UPDATE;
+      GUILD_SCHEDULED_EVENT_CREATE, _UPDATE, _DELETE, _USER_ADD and _USER_REMOVE;
+      GUILD_SOUNDBOARD_SOUND_CREATE, _UPDATE, _DELETE, GUILD_SOUNDBOARD_SOUNDS_UPDATE and
+      SOUNDBOARD_SOUNDS; INTEGRATION_CREATE, _UPDATE and _DELETE; INVITE_CREATE and _DELETE;
+      MESSAGE_REACTION_REMOVE_ALL and _REMOVE_EMOJI; MESSAGE_POLL_VOTE_ADD and _REMOVE;
+      RAW_GUILD_DELETE; SUBSCRIPTION_CREATE, _UPDATE and _DELETE; THREAD_MEMBER_UPDATE and
+      THREAD_MEMBERS_UPDATE; VOICE_SERVER_UPDATE, VOICE_CHANNEL_EFFECT_SEND,
+      VOICE_CHANNEL_STATUS_UPDATE and VOICE_CHANNEL_START_TIME_UPDATE; WEBHOOKS_UPDATE. The cache
+      follows the ones that change what it keeps.
+    - [ ] The gateway request for soundboard sounds (op 31).
+  - Commands:
+    - [ ] Entry point commands (Activities), with their context and the launch response.
+    - [ ] The hooks still missing: on_before_guards, on_before_options, on_after_run,
+      on_permissions_fail and on_internal_error, and on component and modal handlers too.
+    - [ ] Option values that a method transforms or rejects, as Seyfert's `value(ok, fail)`.
+    - [ ] A replaceable argument parser for prefix commands.
+  - Components and modals:
+    - [ ] custom_id matched by a regular expression, and a `filter` method on handlers.
+    - [ ] Collectors for several components or events, with `timeout`, `idle`, `max` and the
+      reason they stopped.
+    - [ ] Attachments from base64.
+  - Utilities:
+    - [ ] A formatter: markdown, mentions (users, channels, roles, slash commands), timestamps and
+      their styles, headings, links, code blocks, lists and OAuth2 URLs.
+    - [ ] CDN URLs for every image Discord serves, with the allowed formats and sizes.
+    - [ ] Helpers on the models: mentions, URLs, display names, creation time, embed colors, color
+      parsing and emoji encoding.
+  - Cache:
+    - [ ] An adapter interface, the in-memory adapter, a limited one (a limit and an expiry per
+      resource) and a conformance suite for adapters.
+  - Plugins:
+    - [ ] Requirements (semver) and imports between plugins, ordering, a typed shared registry
+      with disposal, lifecycle hooks (before commands load, plugins ready, client close),
+      contributions that teardown removes, plugin intents, guard and autocomplete wrappers, and
+      errors that name the plugin, with an aggregate error.
+  - REST generator:
+    - [ ] The 3 endpoints that only take multipart, the 18 array query parameters and string enums.
+  - Gateway:
+    - [ ] Automatic resharding.
+  - Benchmarks:
+    - [ ] RAM per guild and events per second, against Seyfert.
+  - Documentation:
+    - [ ] The README and CHANGELOG cover everything above.
 
 ## 7. Risks and V gaps found
 

@@ -43,10 +43,38 @@ pub:
 	guild_id                     ?Snowflake // set by member events and by the cache
 }
 
+// Application is the bot's application; READY carries only `id` and `flags`.
 pub struct Application {
 pub:
-	id   Snowflake
-	name string
+	id                                Snowflake
+	name                              string
+	icon                              ?string
+	description                       string
+	rpc_origins                       ?[]string
+	bot_public                        bool
+	bot_require_code_grant            bool
+	bot                               ?User
+	terms_of_service_url              ?string
+	privacy_policy_url                ?string
+	owner                             ?User
+	verify_key                        string
+	team                              ?RawJson
+	guild_id                          ?Snowflake
+	primary_sku_id                    ?Snowflake
+	slug                              ?string
+	cover_image                       ?string
+	flags                             ?int
+	approximate_guild_count           ?int
+	approximate_user_install_count    ?int
+	redirect_uris                     ?[]string
+	interactions_endpoint_url         ?string
+	role_connections_verification_url ?string
+	event_webhooks_url                ?string
+	event_webhooks_status             ?int
+	tags                              ?[]string
+	install_params                    ?RawJson
+	integration_types_config          ?RawJson
+	custom_install_url                ?string
 }
 
 pub struct UnavailableGuild {

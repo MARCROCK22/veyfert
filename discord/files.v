@@ -1,5 +1,6 @@
 module discord
 
+import encoding.base64
 import net.http
 import net.http.mime
 import os
@@ -10,6 +11,11 @@ pub:
 	name         string
 	data         []u8
 	content_type string = 'application/octet-stream'
+}
+
+// data_uri is the file as Discord takes images and sounds in JSON bodies: `data:<type>;base64,…`.
+pub fn (f File) data_uri() string {
+	return 'data:${f.content_type};base64,${base64.encode(f.data)}'
 }
 
 // file_from_path reads a file to attach, typed by its extension.

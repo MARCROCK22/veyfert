@@ -468,8 +468,17 @@ pub fn (mut r RoleShorter) delete(guild_id discord.Snowflake, role_id discord.Sn
 	r.client.cache.forget_role(guild_id, role_id)
 }
 
-// GuildShorter reads the guilds of the bot and leaves them.
+// GuildShorter reads and manages guilds; its fields reach sub-resources, such as
+// `c.guilds.stickers.list(guild_id)`.
 pub struct GuildShorter {
+pub mut:
+	audit      AuditLogShorter
+	onboarding OnboardingShorter
+	welcome    WelcomeShorter
+	widget     WidgetShorter
+	moderation AutoModerationShorter // auto moderation rules
+	events     ScheduledEventShorter // scheduled events
+	stickers   StickerShorter
 mut:
 	client &Client = unsafe { nil }
 }

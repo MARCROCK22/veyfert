@@ -332,6 +332,7 @@ fn (mut c Client) rate_limited(raw string) {
 fn (mut c Client) shard_ready(shard int, ready discord.Ready) {
 	c.mu.lock()
 	c.user = ready.user
+	c.app_id = ready.application.id
 	c.mu.unlock()
 	c.logger.info('shard ${shard}: ready as ${ready.user.username}')
 }

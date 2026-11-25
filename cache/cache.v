@@ -774,3 +774,73 @@ pub fn (mut c Cache) store_ban(guild_id discord.Snowflake, user_id discord.Snowf
 	}
 	c.mu.unlock()
 }
+
+pub fn (mut c Cache) sticker(guild_id discord.Snowflake, sticker_id discord.Snowflake) ?discord.Sticker {
+	c.mu.rlock()
+	defer {
+		c.mu.runlock()
+	}
+	for s in c.stickers[guild_id.value] or { return none } {
+		if s.id == sticker_id {
+			return s
+		}
+	}
+	return none
+}
+
+pub fn (mut c Cache) store_sticker(guild_id discord.Snowflake, s discord.Sticker) {
+	if !c.options.stickers {
+		return
+	}
+	c.mu.lock()
+	mut kept := (c.stickers[guild_id.value] or { []discord.Sticker{} }).filter(it.id != s.id)
+	kept << s
+	c.stickers[guild_id.value] = kept
+	c.mu.unlock()
+}
+
+pub fn (mut c Cache) forget_sticker(guild_id discord.Snowflake, sticker_id discord.Snowflake) {
+	c.mu.lock()
+	if kept := c.stickers[guild_id.value] {
+		c.stickers[guild_id.value] = kept.filter(it.id != sticker_id)
+	}
+	c.mu.unlock()
+}
+
+// stage_instance returns the live stage instance of a stage channel.
+pub fn (mut c Cache) stage_instance(channel_id discord.Snowflake) ?discord.StageInstance {
+	c.mu.rlock()
+	defer {
+		c.mu.runlock()
+	}
+	for _, instances in c.stage_instances {
+		for _, s in instances {
+			if s.channel_id == channel_id {
+				return s
+			}
+		}
+	}
+	return none
+}
+
+pub fn (mut c Cache) store_stage_instance(s discord.StageInstance) {
+	if !c.options.stage_instances {
+		return
+	}
+	c.mu.lock()
+	c.put_stage_instance(s)
+	c.mu.unlock()
+}
+
+pub fn (mut c Cache) forget_stage_instance(guild_id discord.Snowflake, channel_id discord.Snowflake) {
+	c.mu.lock()
+	if guild_id.value in c.stage_instances {
+		for id, s in c.stage_instances[guild_id.value] {
+			if s.channel_id == channel_id {
+				c.stage_instances[guild_id.value].delete(id)
+				break
+			}
+		}
+	}
+	c.mu.unlock()
+}

@@ -99,7 +99,10 @@ pub:
 	query  string // already encoded, without `?`
 	reason string // written to the audit log
 	files  []discord.File
-	auth   bool = true
+	// form sends plain form fields instead of `body`, with the files in parts named `file_field`.
+	form       map[string]string
+	file_field string
+	auth       bool = true
 }
 
 // CallOptions are the options every generated endpoint accepts.
@@ -233,7 +236,12 @@ fn (mut r Rest) send_once(method http.Method, path string, opts RequestOptions) 
 		headers['X-Audit-Log-Reason'] = urllib.query_escape(opts.reason).replace('+', '%20')
 	}
 	mut body := opts.body
-	if opts.files.len > 0 {
+	if opts.form.len > 0 || opts.file_field != '' {
+		field := if opts.file_field != '' { opts.file_field } else { 'file' }
+		content_type, form := form_data(opts.form, field, opts.files)
+		headers['Content-Type'] = content_type
+		body = form
+	} else if opts.files.len > 0 {
 		content_type, form := multipart(opts.body, opts.files)
 		headers['Content-Type'] = content_type
 		body = form
@@ -414,6 +422,24 @@ pub fn multipart(payload_json string, files []discord.File) (string, string) {
 	for i, f in files {
 		name := f.name.replace_each(['"', '_', '\r', '_', '\n', '_'])
 		sb.write_string('--${boundary}\r\nContent-Disposition: form-data; name="files[${i}]"; filename="${name}"\r\nContent-Type: ${f.content_type}\r\n\r\n')
+		sb.write(f.data) or {}
+		sb.write_string('\r\n')
+	}
+	sb.write_string('--${boundary}--\r\n')
+	return 'multipart/form-data; boundary=${boundary}', sb.str()
+}
+
+// form_data encodes plain form fields, then the files in parts named `file_field`: the sticker
+// upload takes `file`, and invite target users `target_users_file`.
+pub fn form_data(fields map[string]string, file_field string, files []discord.File) (string, string) {
+	boundary := 'veyfert${crand.int_u64(max_u64) or { 0 }}'
+	mut sb := strings.new_builder(1024)
+	for key, value in fields {
+		sb.write_string('--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n')
+	}
+	for f in files {
+		name := f.name.replace_each(['"', '_', '\r', '_', '\n', '_'])
+		sb.write_string('--${boundary}\r\nContent-Disposition: form-data; name="${file_field}"; filename="${name}"\r\nContent-Type: ${f.content_type}\r\n\r\n')
 		sb.write(f.data) or {}
 		sb.write_string('\r\n')
 	}
