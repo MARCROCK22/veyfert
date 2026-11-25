@@ -587,6 +587,8 @@ fn (mut s Shard) drop(generation int, reason string) {
 	ws.close(close_resumable, reason) or {}
 }
 
+// stop closes the connection for good. It does not close with 1000, which would end the
+// session for Discord: as Seyfert does, it keeps the session resumable for `save_sessions`.
 fn (mut s Shard) stop() {
 	s.mu.lock()
 	s.stopping = true
@@ -594,7 +596,7 @@ fn (mut s Shard) stop() {
 	s.mu.unlock()
 	_ = s.outbox.try_push('')
 	if !isnil(ws) {
-		ws.close(1000, 'client stopping') or {}
+		ws.close(close_resumable, 'client stopping') or {}
 	}
 }
 

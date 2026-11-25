@@ -149,7 +149,9 @@ pub fn (mut c Client) run() ! {
 	c.close_plugins()!
 }
 
-// stop closes every shard; `run` returns once they have disconnected.
+// stop closes every shard; `run` returns once they have disconnected. The sessions stay
+// resumable for a while, so `save_sessions` and `ClientOptions.sessions` can resume them on the
+// next start; until they expire, Discord shows the bot online.
 pub fn (mut c Client) stop() {
 	c.halt()
 	for mut s in c.current_shards() {
