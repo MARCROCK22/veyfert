@@ -5,6 +5,11 @@
 # net.websocket masks every frame it sends with rand.bytes(), V's global generator, which is
 # not thread safe: two threads that send frames race on it. vlang/v#32886
 race:websocket__create_masking_key
+# It also names each client with rand.uuid_v4() and makes the handshake key with
+# rand.string_from_set(), the same generator, so clients that connect at once race on it, as
+# shards do when they reconnect together or when resharding connects new ones. vlang/v#32886
+race:websocket__new_client
+race:websocket__get_nonce
 
 # net.TcpConn.read_ptr takes the connection by value, so each read copies the struct while a
 # write on another thread updates it (last_write_sent). vlang/v#32888
