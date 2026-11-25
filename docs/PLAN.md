@@ -418,6 +418,7 @@ veyfert/
 | 6 | Prefix, i18n, plugins and HTTP | An HTTP test with requests signed by a key generated in the test itself |
 | 7 | Production and publishing | Public `veyfert.testing`, docs, examples and benchmarks; CI on the three systems and published on VPM |
 | 8 | Seyfert parity | Every item of the phase 8 checklist is done, tested and green in CI |
+| 9 | Example bots | Every bot of the phase 9 list is in `examples/`, builds with `-W` in CI, and was driven through `veyfert.testing` and started against Discord |
 
 Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gateway and REST.
 
@@ -782,6 +783,50 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
     - [x] The README links to them, and the README and CHANGELOG cover everything above. The
       README is now a landing page (the example, what veyfert has, installing, the pages, the
       deployment caveats); its guide moved into the pages.
+
+**Phase 9 — Example bots.**
+- Asked on 2026-11-25: a folder of working example bots, as many as possible, pushed one at a
+  time. Each is `examples/<name>/main.v`, listed in `examples/README.md`; CI builds every folder
+  with `-W`. Before each push, a test outside the repository drove it through
+  `veyfert.testing`, and it was started against Discord in the test server: it connected, and
+  Discord took its commands. The test application has no privileged intents, so bots that need
+  one only uploaded their commands. After ten, the user chose to leave the rest for later.
+- Done: moderation, welcome, tickets, role-menu, levels, tictactoe, reminders, tags, starboard
+  and giveaway. Writing them found and fixed a V bug, the permissions past bit 31 that the
+  default permission hooks lost (risk 24), added `Snowflake.is_zero()`, and suppressed one more
+  `net.websocket` race (risk 21).
+- Left for later (2026-11-25), in this order:
+  - [ ] logs: message edits and deletions (from the cache), joins, leaves, bans and role changes,
+    to a log channel.
+  - [ ] trivia: a question with four buttons that anyone answers (`collect_components` with
+    `anyone`), then the results.
+  - [ ] economy: balance, daily and work with cooldown guards, paying another member, a
+    leaderboard; a JSON file.
+  - [ ] suggestions: a modal posts a suggestion with vote buttons and a thread; staff approve or
+    deny it behind a guard.
+  - [ ] info: user, server, role and channel info, avatars, and user and message context menus.
+  - [ ] counting: a counting channel that checks each number (Message Content).
+  - [ ] afk: an AFK status that answers mentions and ends with the next message.
+  - [ ] automod: banned words, invite links, mass mentions and spam, with timeouts and a log
+    (Message Content).
+  - [ ] embed-builder: a modal builds an embed, previewed with buttons before it is sent.
+  - [ ] temp-voice: join-to-create voice channels that their owner manages and that go when
+    empty.
+  - [ ] http-interactions: dice, coin flips and choices over `veyfert.server`, without a gateway.
+  - [ ] i18n: one bot in several languages with `Langs[T]` and translated commands.
+  - [ ] plugin: writing a reusable plugin (info, hooks, shared values, a global guard) and
+    installing it.
+  - [ ] tested: a bot with its own `main_test.v` that uses `veyfert.testing`.
+  - [ ] production: settings from the environment, saved sessions, graceful shutdown on a
+    signal, REST and command metrics, cache limits, compression and shard ranges.
+  - [ ] todo: a personal to-do list with buttons.
+  - [ ] birthdays: birthdays announced every day by the Scheduler plugin.
+  - [ ] stats-channels: channel names that show member counts, updated on a schedule.
+  - [ ] webhooks: post as a character through webhooks.
+  - [ ] calculator: a calculator made of buttons.
+  - [ ] rps: rock, paper, scissors against a member or the bot.
+  - [ ] auto-thread: a thread for every message in chosen channels.
+  - [ ] reaction-roles: roles given and taken by reactions on a message.
 
 ## 7. Risks and V gaps found
 
