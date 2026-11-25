@@ -77,14 +77,36 @@ uses REST.
 
 ## Payloads
 
-The payloads come from user 7 (`ana`) in channel 300 of guild 30, as Discord sends them:
+The payloads come from user 7 (`ana`), a member of guild 30 with no roles or permissions, in
+channel 300, as Discord sends them. The bot has every permission in the channel, so commands
+with `@[BotPerms]` run.
 
 | Function | Builds |
 |---|---|
 | `command_interaction(name, options_json)` | A slash command, with its options as JSON: `'[{"name":"text","type":3,"value":"hi"}]'` |
+| `autocomplete_interaction(name, options_json)` | Someone typing in an option, the one marked `"focused":true` |
 | `component_interaction(custom_id, values)` | A click, or a pick of `values`, on message 200 |
 | `modal_submit(custom_id, values)` | A modal sent with its inputs, by input custom_id |
+| `message_menu(name, message_json)` | A message context menu command run on a message, such as one from `message_create` |
 | `message_create(content)` | A message from ana, for listeners and prefix commands |
+
+Each one takes a `testing.From` last, to change who sends it and the permissions involved:
+
+| `From` field | Default | Meaning |
+|---|---|---|
+| `user_id`, `username` | `'7'`, `'ana'` | Who sends it |
+| `roles` | none | The member's role IDs |
+| `member_permissions` | none | What the member may do in the channel |
+| `bot_permissions` | every permission | What the bot may do there; lower it to test `@[BotPerms]` |
+
+```v
+// The bot may not ban here, so a command with @[BotPerms('ban_members')] is refused.
+testing.command_interaction('ban', '[]', bot_permissions: .send_messages)
+// Another member, a moderator with a role, presses a button.
+testing.component_interaction('ticket:close:7', [], user_id: '8', roles: ['50'], member_permissions: .manage_threads)
+// A context menu on a message that bo wrote.
+testing.message_menu('Count words', testing.message_create('one two three', user_id: '8', username: 'bo'))
+```
 
 ## Testing without the framework
 

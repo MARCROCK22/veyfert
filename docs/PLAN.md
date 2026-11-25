@@ -794,7 +794,9 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
 - Done: moderation, welcome, tickets, role-menu, levels, tictactoe, reminders, tags, starboard
   and giveaway. Writing them found and fixed a V bug, the permissions past bit 31 that the
   default permission hooks lost (risk 24), added `Snowflake.is_zero()`, and suppressed one more
-  `net.websocket` race (risk 21).
+  `net.websocket` race (risk 21). Their tests edited the payloads of `veyfert.testing` by hand,
+  so the payloads now give the bot every permission, take `testing.From` (who sends them, roles,
+  permissions), and gained `autocomplete_interaction` and `message_menu`.
 - Left for later (2026-11-25), in this order:
   - [ ] logs: message edits and deletions (from the cache), joins, leaves, bans and role changes,
     to a log channel.

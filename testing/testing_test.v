@@ -54,3 +54,86 @@ fn test_payloads_decode_as_discord_sends_them() ! {
 	}).contains('"custom_id":"text","value":"hello"')
 	assert component_interaction('x', ['a']).contains('"values":["a"]')
 }
+
+@[veyfert.BotPerms('ban_members')]
+@[veyfert.Declare(name: 'ban', description: 'Needs to ban')]
+struct Ban {}
+
+fn (b Ban) run(mut ctx veyfert.CommandContext) ! {
+	ctx.write(content: 'banned')!
+}
+
+fn test_the_bot_has_every_permission_unless_a_test_lowers_them() {
+	mut bot := client(none, new_transport())
+	bot.commands.add(Ban{})
+	assert bot.handle_http(command_interaction('ban', '[]'), time.second).body.contains('banned')
+	refused := bot.handle_http(command_interaction('ban', '[]', bot_permissions: .send_messages),
+		time.second)
+	assert refused.body.contains('I need these permissions here: ban_members.')
+}
+
+@[veyfert.Declare(name: 'whoami', description: 'Says who runs it')]
+struct WhoAmI {}
+
+fn (w WhoAmI) run(mut ctx veyfert.CommandContext) ! {
+	user := ctx.author()
+	member := ctx.member() or { return error('no member') }
+	ctx.write(
+		content: '${user.username}:${user.id}:${member.roles.map(it.str()).join(',')}:${member.permissions or {
+			''
+		}}'
+	)!
+}
+
+fn test_from_changes_who_sends_a_payload() {
+	mut bot := client(none, new_transport())
+	bot.commands.add(WhoAmI{})
+	assert bot.handle_http(command_interaction('whoami', '[]'), time.second).body.contains('"content":"ana:7::0"')
+	other := bot.handle_http(command_interaction('whoami', '[]',
+		user_id:            '8'
+		username:           'bo'
+		roles:              ['50', '51']
+		member_permissions: .manage_messages
+	), time.second)
+	assert other.body.contains('"content":"bo:8:50,51:8192"')
+}
+
+@[veyfert.Declare(name: 'pick', description: 'Picks a fruit')]
+struct Pick {
+mut:
+	fruit string @[veyfert.Autocomplete; veyfert.Desc: 'A fruit']
+}
+
+fn (p Pick) run(mut ctx veyfert.CommandContext) ! {
+	ctx.write(content: p.fruit)!
+}
+
+fn (p Pick) autocomplete(mut ctx veyfert.AutocompleteContext) ! {
+	ctx.respond(['apple', 'apricot', 'banana'].filter(it.starts_with(ctx.value)).map(veyfert.Choice{
+		name:  it
+		value: it
+	}))!
+}
+
+fn test_autocomplete_and_message_menu_payloads() {
+	mut bot := client(none, new_transport())
+	bot.commands.add(Pick{})
+	bot.commands.add(CountWords{})
+	typed := bot.handle_http(autocomplete_interaction('pick', '[{"name":"fruit","type":3,"value":"ap","focused":true}]'),
+		time.second)
+	assert typed.body.contains('"type":8') && typed.body.contains('"apple"')
+		&& typed.body.contains('"apricot"') && !typed.body.contains('banana')
+	counted := bot.handle_http(message_menu('Count words', message_create('one two three',
+		user_id:  '8'
+		username: 'bo'
+	)), time.second)
+	assert counted.body.contains('"content":"3 words by bo"')
+}
+
+@[veyfert.MessageMenu('Count words')]
+struct CountWords {}
+
+fn (c CountWords) run(mut ctx veyfert.CommandContext) ! {
+	msg := ctx.target_message() or { return error('no target') }
+	ctx.write(content: '${msg.content.fields().len} words by ${msg.author.username}')!
+}

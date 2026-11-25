@@ -52,3 +52,7 @@ What Seyfert has and the first version lacked (docs/PLAN.md, phase 8):
   `ClientOptions.sessions` now resume them on the next start. Until they expire, Discord shows
   the bot online.
 - `Plugin` is unchanged, but installing a second plugin with a name that is taken fails.
+- `veyfert.testing`'s payloads give the bot every permission in the channel, so commands with
+  `@[BotPerms]` run in tests. `testing.From`, the last argument of every payload builder, sets
+  who sends a payload, their roles and the permissions involved, and `autocomplete_interaction`
+  and `message_menu` build the two payloads that were missing.
