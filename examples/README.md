@@ -21,3 +21,4 @@ warnings as errors.
 | [role-menu](role-menu/main.v) | An admin picks roles; members take them or give them back from a menu | A role select, `wait_for_component`, resolved data, a string select, deferred answers | — |
 | [levels](levels/main.v) | XP for talking, level-up announcements, `/rank` and `/leaderboard`, saved to a JSON file | Message events, a custom event with `emit`, shared state, the Scheduler plugin, the `client_close` hook | — |
 | [tictactoe](tictactoe/main.v) | Tic-tac-toe with buttons, against a member or against the bot | State in custom IDs (no storage), a prefix route, updating the message, disabled buttons | — |
+| [reminders](reminders/main.v) | `/remind when:1h30m what:...`, then lists and cancels them; delivered by DM when the channel is closed | Autocomplete, `check_options`, subcommands, the Scheduler plugin, a JSON file written safely | — |
