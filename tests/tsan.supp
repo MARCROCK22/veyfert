@@ -18,3 +18,7 @@ race:websocket__Client__socket_read_unbuffered
 # Client.close() closes the socket while the client's listen() may be inside recv() on it.
 # vlang/v#32887
 race:websocket__Client__shutdown_socket
+# It also clears the fragments of a message (reset_state, clear_fragments) that listen() may be
+# reading on another thread (validate_frame), as a shard that stops while a frame arrives
+# shows. vlang/v#32887
+race:websocket__Client__reset_state

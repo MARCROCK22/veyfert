@@ -50,7 +50,8 @@ details.
   uses `crypto.rand`.
 - `TcpConn.read` copies the connection while another thread writes to it
   ([vlang/v#32888](https://github.com/vlang/v/issues/32888)).
-- `Client.close()` closes the socket while `listen()` reads from it
+- `Client.close()` closes the socket while `listen()` reads from it, and clears the fragments
+  of the message that `listen()` is reading
   ([vlang/v#32887](https://github.com/vlang/v/issues/32887)).
 - Its server binds every interface, so `veyfert.testing` has its own on 127.0.0.1, and Windows
   does not ask about the firewall on every test run.
