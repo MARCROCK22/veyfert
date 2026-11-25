@@ -767,9 +767,17 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
     - [ ] RAM per guild and events per second, against Seyfert.
   - Documentation (asked on 2026-11-24: "make /docs a set of files explaining each feature, like
     the cache, the API, the gateway, resharding... everything, with usage examples"):
-    - [ ] `docs/`: one file per feature, each with usage examples, and an index; written after the
-      code above is done, so they cover resharding too. `PLAN.md` stays in `docs/`.
-    - [ ] The README links to them, and the README and CHANGELOG cover everything above.
+    - [x] `docs/`: one file per feature, each with usage examples, and an index; written after the
+      code above is done, so they cover resharding too. `PLAN.md` stays in `docs/`. 21 pages:
+      the index, getting-started, client, gateway, resharding, events, commands, responses,
+      guards, components, prefix-commands, cache, rest, rest-api, models, formatter, i18n,
+      plugins, http-interactions, testing and known-issues. `tests/check_docs.vsh` builds every
+      complete program in them and runs the test files, in CI on Linux, so the examples compile
+      as shown; writing them found two bugs, fixed: `stop` ended the sessions it meant to keep,
+      and a docs claim about `wait_for_modal`.
+    - [x] The README links to them, and the README and CHANGELOG cover everything above. The
+      README is now a landing page (the example, what veyfert has, installing, the pages, the
+      deployment caveats); its guide moved into the pages.
 
 ## 7. Risks and V gaps found
 

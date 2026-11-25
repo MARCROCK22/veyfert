@@ -36,6 +36,9 @@ jobs:
         run: |
           v -W -path "$VPATH" -o basic veyfert/examples/basic
           v -W -path "$VPATH" -o components veyfert/examples/components
+      - name: Documentation examples
+        if: runner.os == 'Linux' # the examples do not depend on the platform
+        run: v run veyfert/tests/check_docs.vsh
       - name: Race detector
         if: runner.os != 'Windows' # -race is not available on Windows
         env:
