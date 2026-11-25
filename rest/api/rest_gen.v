@@ -63,6 +63,19 @@ pub fn (mut a Api) applications_get_activity_instance(application_id discord.Sno
 	return json2.decode[EmbeddedActivityInstance](text)!
 }
 
+// upload_application_attachment: POST /applications/{application_id}/attachment
+pub fn (mut a Api) upload_application_attachment(application_id discord.Snowflake, file discord.File, opts rest.CallOptions) !ActivitiesAttachmentResponse {
+	parts := map[string]string{}
+	text := a.http.request(.post, '/applications/${application_id}/attachment',
+		query:      ''
+		reason:     opts.reason
+		form:       parts
+		file_field: 'file'
+		files:      [file]
+	)!
+	return json2.decode[ActivitiesAttachmentResponse](text)!
+}
+
 @[params]
 pub struct ListApplicationCommandsOptions {
 	rest.CallOptions
@@ -198,6 +211,7 @@ pub struct GetEntitlementsOptions {
 	rest.CallOptions
 pub:
 	user_id         ?discord.Snowflake
+	sku_ids         []discord.Snowflake
 	guild_id        ?discord.Snowflake
 	before          ?discord.Snowflake
 	after           ?discord.Snowflake
@@ -212,6 +226,9 @@ pub fn (mut a Api) get_entitlements(application_id discord.Snowflake, opts GetEn
 	mut q := []string{}
 	if v := opts.user_id {
 		q << 'user_id=${v.str()}'
+	}
+	for v in opts.sku_ids {
+		q << 'sku_ids=${v.str()}'
 	}
 	if v := opts.guild_id {
 		q << 'guild_id=${v.str()}'
@@ -1054,6 +1071,7 @@ pub:
 	slop        ?int
 	min_id      ?discord.Snowflake
 	max_id      ?discord.Snowflake
+	tag         []discord.Snowflake
 	tag_setting ?string
 	archived    ?bool
 	sort_by     ?string
@@ -1076,6 +1094,9 @@ pub fn (mut a Api) thread_search(channel_id discord.Snowflake, opts ThreadSearch
 	}
 	if v := opts.max_id {
 		q << 'max_id=${v.str()}'
+	}
+	for v in opts.tag {
+		q << 'tag=${v.str()}'
 	}
 	if v := opts.tag_setting {
 		q << 'tag_setting=${urllib.query_escape(v)}'
@@ -1664,17 +1685,30 @@ pub fn (mut a Api) delete_guild_member_role(guild_id discord.Snowflake, user_id 
 pub struct GuildSearchOptions {
 	rest.CallOptions
 pub:
-	sort_by          ?string
-	sort_order       ?string
-	content          ?string
-	slop             ?int
-	mention_everyone ?bool
-	min_id           ?discord.Snowflake
-	max_id           ?discord.Snowflake
-	limit            ?int
-	offset           ?int
-	pinned           ?bool
-	include_nsfw     ?bool
+	sort_by               ?string
+	sort_order            ?string
+	content               ?string
+	slop                  ?int
+	author_id             []discord.Snowflake
+	author_type           []string
+	mentions              []discord.Snowflake
+	mentions_role_id      []discord.Snowflake
+	replied_to_user_id    []discord.Snowflake
+	replied_to_message_id []discord.Snowflake
+	mention_everyone      ?bool
+	min_id                ?discord.Snowflake
+	max_id                ?discord.Snowflake
+	limit                 ?int
+	offset                ?int
+	has                   []string
+	link_hostname         []string
+	embed_provider        []string
+	embed_type            []string
+	attachment_extension  []string
+	attachment_filename   []string
+	pinned                ?bool
+	include_nsfw          ?bool
+	channel_id            []discord.Snowflake
 }
 
 // guild_search: GET /guilds/{guild_id}/messages/search
@@ -1692,6 +1726,24 @@ pub fn (mut a Api) guild_search(guild_id discord.Snowflake, opts GuildSearchOpti
 	if v := opts.slop {
 		q << 'slop=${v.str()}'
 	}
+	for v in opts.author_id {
+		q << 'author_id=${v.str()}'
+	}
+	for v in opts.author_type {
+		q << 'author_type=${urllib.query_escape(v)}'
+	}
+	for v in opts.mentions {
+		q << 'mentions=${v.str()}'
+	}
+	for v in opts.mentions_role_id {
+		q << 'mentions_role_id=${v.str()}'
+	}
+	for v in opts.replied_to_user_id {
+		q << 'replied_to_user_id=${v.str()}'
+	}
+	for v in opts.replied_to_message_id {
+		q << 'replied_to_message_id=${v.str()}'
+	}
 	if v := opts.mention_everyone {
 		q << 'mention_everyone=${v.str()}'
 	}
@@ -1707,11 +1759,32 @@ pub fn (mut a Api) guild_search(guild_id discord.Snowflake, opts GuildSearchOpti
 	if v := opts.offset {
 		q << 'offset=${v.str()}'
 	}
+	for v in opts.has {
+		q << 'has=${urllib.query_escape(v)}'
+	}
+	for v in opts.link_hostname {
+		q << 'link_hostname=${urllib.query_escape(v)}'
+	}
+	for v in opts.embed_provider {
+		q << 'embed_provider=${urllib.query_escape(v)}'
+	}
+	for v in opts.embed_type {
+		q << 'embed_type=${urllib.query_escape(v)}'
+	}
+	for v in opts.attachment_extension {
+		q << 'attachment_extension=${urllib.query_escape(v)}'
+	}
+	for v in opts.attachment_filename {
+		q << 'attachment_filename=${urllib.query_escape(v)}'
+	}
 	if v := opts.pinned {
 		q << 'pinned=${v.str()}'
 	}
 	if v := opts.include_nsfw {
 		q << 'include_nsfw=${v.str()}'
+	}
+	for v in opts.channel_id {
+		q << 'channel_id=${v.str()}'
 	}
 	text := a.http.request(.get, '/guilds/${guild_id}/messages/search',
 		body:   ''
@@ -1792,7 +1865,8 @@ pub fn (mut a Api) get_guild_preview(guild_id discord.Snowflake, opts rest.CallO
 pub struct PreviewPruneGuildOptions {
 	rest.CallOptions
 pub:
-	days ?int
+	days          ?int
+	include_roles []discord.Snowflake
 }
 
 // preview_prune_guild: GET /guilds/{guild_id}/prune
@@ -1800,6 +1874,9 @@ pub fn (mut a Api) preview_prune_guild(guild_id discord.Snowflake, opts PreviewP
 	mut q := []string{}
 	if v := opts.days {
 		q << 'days=${v.str()}'
+	}
+	for v in opts.include_roles {
+		q << 'include_roles=${v.str()}'
 	}
 	text := a.http.request(.get, '/guilds/${guild_id}/prune',
 		body:   ''
@@ -2100,12 +2177,23 @@ pub fn (mut a Api) list_guild_scheduled_event_users(guild_id discord.Snowflake, 
 	return json2.decode[[]ScheduledEventUserResponse](text)!
 }
 
+@[params]
+pub struct CountGuildScheduledEventUsersOptions {
+	rest.CallOptions
+pub:
+	guild_scheduled_event_exception_ids []discord.Snowflake
+}
+
 // count_guild_scheduled_event_users: GET /guilds/{guild_id}/scheduled-events/{guild_scheduled_event_id}/users/counts
-pub fn (mut a Api) count_guild_scheduled_event_users(guild_id discord.Snowflake, guild_scheduled_event_id discord.Snowflake, opts rest.CallOptions) !ScheduledEventUserCountResponse {
+pub fn (mut a Api) count_guild_scheduled_event_users(guild_id discord.Snowflake, guild_scheduled_event_id discord.Snowflake, opts CountGuildScheduledEventUsersOptions) !ScheduledEventUserCountResponse {
+	mut q := []string{}
+	for v in opts.guild_scheduled_event_exception_ids {
+		q << 'guild_scheduled_event_exception_ids=${v.str()}'
+	}
 	text := a.http.request(.get,
 		'/guilds/${guild_id}/scheduled-events/${guild_scheduled_event_id}/users/counts',
 		body:   ''
-		query:  ''
+		query:  q.join('&')
 		reason: opts.reason
 		files:  opts.files
 	)!
@@ -2210,6 +2298,31 @@ pub fn (mut a Api) list_guild_stickers(guild_id discord.Snowflake, opts rest.Cal
 		files:  opts.files
 	)!
 	return json2.decode[[]GuildStickerResponse](text)!
+}
+
+pub struct CreateGuildStickerForm {
+pub:
+	name        string
+	tags        string
+	description ?string
+}
+
+// create_guild_sticker: POST /guilds/{guild_id}/stickers
+pub fn (mut a Api) create_guild_sticker(guild_id discord.Snowflake, form CreateGuildStickerForm, file discord.File, opts rest.CallOptions) !GuildStickerResponse {
+	mut parts := map[string]string{}
+	parts['name'] = form.name
+	parts['tags'] = form.tags
+	if v := form.description {
+		parts['description'] = v
+	}
+	text := a.http.request(.post, '/guilds/${guild_id}/stickers',
+		query:      ''
+		reason:     opts.reason
+		form:       parts
+		file_field: 'file'
+		files:      [file]
+	)!
+	return json2.decode[GuildStickerResponse](text)!
 }
 
 // get_guild_sticker: GET /guilds/{guild_id}/stickers/{sticker_id}
@@ -2525,6 +2638,18 @@ pub fn (mut a Api) get_invite_target_users(code string, opts rest.CallOptions) !
 		query:  ''
 		reason: opts.reason
 		files:  opts.files
+	)!
+}
+
+// update_invite_target_users: PUT /invites/{code}/target-users
+pub fn (mut a Api) update_invite_target_users(code string, target_users_file discord.File, opts rest.CallOptions) ! {
+	parts := map[string]string{}
+	a.http.request(.put, '/invites/${urllib.path_escape(code)}/target-users',
+		query:      ''
+		reason:     opts.reason
+		form:       parts
+		file_field: 'target_users_file'
+		files:      [target_users_file]
 	)!
 }
 
@@ -3017,12 +3142,16 @@ pub fn (mut a Api) update_my_user(body BotAccountPatchRequest, opts rest.CallOpt
 pub struct GetCurrentUserApplicationEntitlementsOptions {
 	rest.CallOptions
 pub:
+	sku_ids          []discord.Snowflake
 	exclude_consumed ?bool
 }
 
 // get_current_user_application_entitlements: GET /users/@me/applications/{application_id}/entitlements
 pub fn (mut a Api) get_current_user_application_entitlements(application_id discord.Snowflake, opts GetCurrentUserApplicationEntitlementsOptions) ![]EntitlementResponse {
 	mut q := []string{}
+	for v in opts.sku_ids {
+		q << 'sku_ids=${v.str()}'
+	}
 	if v := opts.exclude_consumed {
 		q << 'exclude_consumed=${v.str()}'
 	}

@@ -69,3 +69,47 @@ fn test_patch_bodies_tell_absent_from_null() ! {
 	assert replay.requests[0].method == .patch
 	assert replay.requests[0].body == '{"name":"renamed","description":null,"afk_timeout":60}'
 }
+
+fn test_array_query_parameters_repeat_and_string_enums_are_constants() ! {
+	mut a, replay := replay_api(['{}', '[]'])
+	_ := a.guild_search(discord.Snowflake{30},
+		content:     'a b'
+		author_id:   [discord.Snowflake{1}, discord.Snowflake{2}]
+		author_type: [author_type_no_bot]
+		has:         [has_option_link, has_option_image]
+	)!
+	assert replay.requests[0].url.ends_with('/guilds/30/messages/search?content=a+b&author_id=1&author_id=2&author_type=-bot&has=link&has=image')
+	// A parameter that takes a string or a list is a list.
+	_ := a.get_entitlements(discord.Snowflake{20}, sku_ids: [discord.Snowflake{5}])!
+	assert replay.requests[1].url.ends_with('/applications/20/entitlements?sku_ids=5')
+	assert oauth2_scopes_identify == 'identify' && available_locales_enum_en_us == 'en-US'
+}
+
+fn test_multipart_endpoints_send_their_fields_and_file() ! {
+	mut a, replay := replay_api(['{"id":"7","name":"wave","tags":"hand","type":2}'])
+	sticker := a.create_guild_sticker(discord.Snowflake{30}, CreateGuildStickerForm{
+		name: 'wave'
+		tags: 'hand'
+	}, discord.File{
+		name:         'wave.png'
+		data:         [u8(1), 2, 3]
+		content_type: 'image/png'
+	}, reason: 'new sticker')!
+	assert sticker.name == 'wave'
+	req := replay.requests[0]
+	assert req.method == .post && req.url.ends_with('/guilds/30/stickers')
+	assert req.headers['Content-Type'].starts_with('multipart/form-data; boundary=')
+	assert req.headers['X-Audit-Log-Reason'] == 'new%20sticker'
+	assert req.body.contains('name="name"\r\n\r\nwave\r\n')
+	assert req.body.contains('name="tags"\r\n\r\nhand\r\n')
+	assert !req.body.contains('name="description"') // none leaves it out
+	assert req.body.contains('name="file"; filename="wave.png"\r\nContent-Type: image/png\r\n\r\n\x01\x02\x03\r\n')
+	a.update_invite_target_users('abc', discord.File{
+		name:         'users.csv'
+		data:         'user_id\n7\n'.bytes()
+		content_type: 'text/csv'
+	})!
+	assert replay.requests[1].method == .put
+	assert replay.requests[1].url.ends_with('/invites/abc/target-users')
+	assert replay.requests[1].body.contains('name="target_users_file"; filename="users.csv"')
+}

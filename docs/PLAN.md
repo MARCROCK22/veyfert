@@ -746,8 +746,14 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
       (class injection), cache resources (the cache adapter covers storage), `langs.contribute`
       (`Langs[T]` is typed), `reload`, diagnostics records (logs say the same), `instanceId` (the
       name is the identity) and an `order` per contribution (they follow the plugin order).
-  - REST generator:
-    - [ ] The 3 endpoints that only take multipart, the 18 array query parameters and string enums.
+  - REST generator (done, tested in `rest/api/api_test.v`):
+    - [x] The 3 endpoints that only take multipart, the 18 array query parameters and string enums.
+      A multipart body is a `…Form` struct with its text fields plus a `discord.File` argument
+      (`create_guild_sticker`, `upload_application_attachment`, `update_invite_target_users`).
+      Array query parameters are lists that go out repeated (`?author_id=1&author_id=2`),
+      OpenAPI's default; the four that take a string or a list are lists. The 23 string enums
+      become 290 constants, such as `api.has_option_link`; fields stay strings, since Discord adds
+      values. The generator skips nothing now: 250 endpoints.
   - Gateway:
     - [ ] Automatic resharding.
   - Benchmarks:

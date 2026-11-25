@@ -7,7 +7,9 @@
 //   guild := discord.get_guild(guild_id)!
 //
 // Calls share the client's rate limits. The shorters (`bot.messages`, `bot.members`...) cover
-// the common endpoints with veyfert's own models and the cache; use this for the rest.
+// the common endpoints with veyfert's own models and the cache; use this for the rest. Integer
+// enums are V enums and string enums are constants, such as `api.has_option_link`; fields keep
+// the wire type, since Discord adds values.
 module api
 
 import veyfert.rest
