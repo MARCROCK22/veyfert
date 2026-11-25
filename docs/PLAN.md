@@ -763,8 +763,12 @@ Phases 3 to 6 can overlap once 0, 1 and 2 are done, since those build the gatewa
       they do not load in time, or the bot stops, they close instead, and it does not start
       when Discord has fewer identifies left than it needs. The shard list became replaceable:
       a lock of its own guards it and `shard_id_for`'s total.
-  - Benchmarks:
-    - [ ] RAM per guild and events per second, against Seyfert.
+  - Benchmarks (left for later, as the user chose on 2026-11-24):
+    - [ ] RAM per guild and events per second, against Seyfert. Two ways were proposed: a local
+      synthetic one (the same guilds and events loaded into both, with the Seyfert 4.3.0 the
+      user's seyfert-benchmark project already has, so nothing to install), and an entry for
+      veyfert in that project, which measures against Discord with the user's bot (32 shards,
+      memory every 5 s).
   - Documentation (asked on 2026-11-24: "make /docs a set of files explaining each feature, like
     the cache, the API, the gateway, resharding... everything, with usage examples"):
     - [x] `docs/`: one file per feature, each with usage examples, and an index; written after the
