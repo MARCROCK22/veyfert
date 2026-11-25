@@ -19,3 +19,4 @@ warnings as errors.
 | [welcome](welcome/main.v) | Greets new members with a card and a role, and says goodbye | Gateway events as plain functions, the cache, allowed mentions, settings from the environment | Server Members |
 | [tickets](tickets/main.v) | A panel button opens a form, the form opens a private thread with the staff, closing it logs a transcript | Buttons, a modal with dependencies, a handler guard, data in the custom ID, threads, files | — |
 | [role-menu](role-menu/main.v) | An admin picks roles; members take them or give them back from a menu | A role select, `wait_for_component`, resolved data, a string select, deferred answers | — |
+| [levels](levels/main.v) | XP for talking, level-up announcements, `/rank` and `/leaderboard`, saved to a JSON file | Message events, a custom event with `emit`, shared state, the Scheduler plugin, the `client_close` hook | — |
